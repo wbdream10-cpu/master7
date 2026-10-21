@@ -28,6 +28,19 @@ try{
  const {sql}=await import('./runtime.mjs');const alice=sql.prepare("SELECT * FROM portal_users WHERE username='alice'").get();assert.notEqual(alice.password_hash,password);assert.notEqual(alice.recovery_hash,aliceRecovery);
  assert.equal((await form('/accounts/approve',{id:alice.id},ownerCookie)).status,303);
  r=await form('/auth/login',{username:'alice',password});assert.equal(r.status,303);const aliceCookie=session(r);
+ const depositPost=(cookie,data,tenant='')=>req('/api/v1/deposit-requests'+(tenant?'?tenant='+tenant:''),{method:'POST',headers:{origin:process.env.PUBLIC_ORIGIN,'content-type':'application/json','x-portal-request':'1',cookie},body:JSON.stringify(data)});
+ const depositGet=(cookie,tenant='')=>req('/api/v1/deposit-requests'+(tenant?'?tenant='+tenant:''),{headers:{cookie}});
+ const depositPayload={amount:'12.34',currency:'MYR',requestKey:'request_key_test_0001'};
+ assert.equal((await depositGet('')).status,401);assert.equal((await depositPost('',depositPayload)).status,401);
+ assert.equal((await (await depositGet(aliceCookie)).json()).requests.length,0);
+ for(const amount of ['0','-1','1e3','1.001','100000.01','NaN',' 1.00','01.00',1.5])assert.equal((await depositPost(aliceCookie,{...depositPayload,amount})).status,400);
+ assert.equal((await depositPost(aliceCookie,{...depositPayload,currency:'USD'})).status,400);
+ let submitted=await depositPost(aliceCookie,{...depositPayload,userId:'forged',tenantId:'forged',status:'paid'});assert.equal(submitted.status,201);const depositResult=await submitted.json();assert.equal(depositResult.request.amountMinor,1234);assert.equal(depositResult.request.tenantId,'main');assert.equal(depositResult.request.status,'awaiting_connection');assert.equal(depositResult.fundsProcessed,false);
+ submitted=await depositPost(aliceCookie,depositPayload);assert.equal(submitted.status,200);assert.equal((await submitted.json()).duplicate,true);
+ assert.equal((await depositPost(aliceCookie,{...depositPayload,amount:'13.34'})).status,409);
+ assert.equal((await (await depositGet(ownerCookie)).json()).requests.length,1);
+ assert.equal(sql.prepare('SELECT count(*) AS n FROM portal_deposit_requests').get().n,1);
+ assert.equal((await req('/api/v1/deposit-requests',{method:'POST',headers:{origin:'https://evil.test','content-type':'application/json','x-portal-request':'1',cookie:aliceCookie},body:JSON.stringify(depositPayload)})).status,403);
  assert.equal((await req('/admin',{headers:{cookie:aliceCookie}})).status,403);assert.equal((await req('/accounts',{headers:{cookie:aliceCookie}})).status,403);
  assert.equal((await post({action:'save-brand',name:'Bad',tagline:'Bad',color:'#123456',logo:''},aliceCookie)).status,403);
  assert.equal((await post({action:'create-ticket',subject:'Account help',body:'Please reply'},aliceCookie)).status,201);
@@ -86,6 +99,13 @@ try{
  const tenantClientCookie=session(await form('/auth/login',{username:'tenantclient',password}));
  assert.equal((await req('/admin',{headers:{cookie:tenantBossCookie}})).status,200);
  assert.equal((await req('/admin',{headers:{cookie:staffCookie}})).status,200);
+ assert.equal((await (await depositGet(tenantClientCookie)).json()).requests.length,0);
+ assert.equal((await depositPost(tenantClientCookie,{...depositPayload,amount:'44.44'})).status,201);
+ assert.equal((await (await depositGet(tenantBossCookie)).json()).requests[0].amountMinor,4444);
+ assert.equal((await depositGet(tenantBossCookie,'main')).status,403);
+ assert.equal((await depositGet(tenantClientCookie,'main')).status,403);
+ assert.equal((await depositGet(staffCookie)).status,403);assert.equal((await depositPost(staffCookie,depositPayload)).status,403);
+ assert.equal((await (await depositGet(ownerCookie,'alpha')).json()).requests.length,1);
  const scoped=await (await get(tenantBossCookie)).json();assert.equal(scoped.tenantId,'alpha');assert.equal(scoped.user.role,'tenant_owner');assert.equal(scoped.tenants.length,0);
  assert.equal((await get(tenantBossCookie,'beta')).status,403);assert.equal((await get(staffCookie,'beta')).status,403);
  assert.equal((await post({action:'save-notice',title:'No',body:'No',published:true},tenantBossCookie,'beta')).status,403);
@@ -110,5 +130,5 @@ try{
  const demoted=session(await form('/auth/login',{username:'staffmember',password}));assert.equal((await req('/admin',{headers:{cookie:demoted}})).status,403);
  assert.equal((await (await get(demoted)).json()).tickets.length,0);
  sql.prepare('UPDATE portal_sessions SET expires_at=0').run();assert.equal((await get(ownerCookie)).status,401);
- console.log('PASS: real local HTTP registration/pending approval/login; owner approval; password hashing; session cookie security; unauthenticated rejection; customer/admin separation; request/reply persistence; tenant isolation; recovery rotation and session revocation; logout; suspension; expired sessions; CSP; built assets; headquarters provisioning; tenant owner isolation; employee restrictions; cross-tenant denial; role-change session revocation. Temporary test database only.');
+ console.log('PASS: real local HTTP registration/pending approval/login; owner approval; password hashing; session cookie security; unauthenticated rejection; customer/admin separation; request/reply persistence; tenant isolation; recovery rotation and session revocation; logout; suspension; expired sessions; CSP; built assets; headquarters provisioning; tenant owner isolation; employee restrictions; cross-tenant denial; role-change session revocation; Deposit request validation, exact minor units, idempotency and isolation. Temporary test database only.');
 }finally{await new Promise(r=>server.close(r));const {sql}=await import('./runtime.mjs');sql.close();rmSync(dir,{recursive:true,force:true});}

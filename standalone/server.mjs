@@ -7,6 +7,7 @@ import {identity,sql} from './runtime.mjs';
 import {digest,secret,passwordValid,hashPassword,verifyPassword,limited,sessionUser,newSession} from './security.mjs';
 import * as api from './dist/api.mjs';
 import {listConnections,configureConnection,receiveEvent,listEvents} from './connections.mjs';
+import {getDepositRequests,createDepositRequest} from './deposit.mjs';
 const origin=new URL(process.env.PUBLIC_ORIGIN||'http://127.0.0.1:8080');
 if(origin.protocol!=='https:'&&!['127.0.0.1','localhost','[::1]'].includes(origin.hostname))throw Error('PUBLIC_ORIGIN must use HTTPS outside local development.');
 const cookieFlags='; Path=/; HttpOnly; SameSite=Lax'+(origin.protocol==='https:'?'; Secure':'');
@@ -23,6 +24,14 @@ function accountsPage(user){const head=user.role==='owner';const users=sql.prepa
 function connectionsPage(){const rows=listConnections(),events=listEvents();return page('通用接口管理',`<main class="accounts"><div class="page-heading"><div><p class="eyebrow">OWNER / CONNECTIONS</p><h1>通用接口管理</h1><p>未配置任何外部服务。接收记录不代表业务已处理。</p></div><a class="secondary" href="/admin">返回老板后台</a></div><section class="account-row"><h2>配置接收通道</h2><form class="settings-form" method="post" action="/connections"><label>连接标识<input name="id" required pattern="[a-z0-9][a-z0-9_-]{2,39}" maxlength="40"></label><label>工作空间 ID<input name="tenantId" required value="main" maxlength="60"></label><label>签名密钥的环境变量名<input name="keyEnv" required pattern="PORTAL_HOOK_[A-Z0-9_]{3,60}" maxlength="72" placeholder="PORTAL_HOOK_..." autocomplete="off"></label><p>这里只填写环境变量名称，密钥由部署负责人在服务器设置，至少 32 字节。</p><label><input type="checkbox" name="enabled"> 启用接收</label><button class="primary">保存连接</button></form></section><section class="account-row"><h2>已配置连接</h2>${rows.length?rows.map(c=>`<div class="account-row"><b>${escape(c.id)}</b><p>${escape(c.tenantId)} · ${c.enabled?'已启用':'已停用'} · ${c.configured?'密钥已配置':'缺少密钥'}</p><code>${escape(c.callbackPath)}</code><p>密钥变量：${escape(c.keyEnv)}</p><form method="post" action="/connections"><input type="hidden" name="id" value="${escape(c.id)}"><input type="hidden" name="tenantId" value="${escape(c.tenantId)}"><input type="hidden" name="keyEnv" value="${escape(c.keyEnv)}">${c.enabled?'':'<input type="hidden" name="enabled" value="on">'}<button class="secondary">${c.enabled?'停用连接':'启用连接'}</button></form></div>`).join(''):'<p>暂无连接。</p>'}</section><section class="account-row"><h2>最近收到的事件</h2><p>仅显示事件元数据，原始内容不会在这里公开。事件仍待接手人员编写适配器处理。</p>${events.length?events.map(e=>`<div class="account-row"><b>${escape(e.type)}</b><p>${escape(e.connectionId)} · ${escape(e.tenantId)} · ${escape(e.receivedAt)}</p><code>${escape(e.eventId)}</code><p>已接收 / 未处理</p></div>`).join(''):'<p>暂无事件。</p>'}</section></main>`)}
 async function handle(req){const url=new URL(req.url,origin);const user=sessionUser(req.headers.cookie);const method=req.method||'GET';
  if(method==='POST'&&!url.pathname.startsWith('/api/v1/hooks/')&&req.headers.origin!==origin.origin)return json({error:'请求来源不受信任'},403);
+ if(url.pathname==='/api/v1/deposit-requests'){
+  if(!user)return json({error:'请先登录'},401);
+  if(method==='GET')return getDepositRequests(user,url.searchParams.get('tenant'));
+  if(method!=='POST')return json({error:'Method not allowed'},405);
+  if(req.headers['x-portal-request']!=='1'||!String(req.headers['content-type']).startsWith('application/json'))return json({error:'请求格式错误'},415);
+  let data;try{data=JSON.parse((await bodyOf(req)).toString());}catch{return json({error:'请求格式错误'},400);}
+  return createDepositRequest(user,url.searchParams.get('tenant'),data);
+ }
  if(url.pathname.startsWith('/api/v1/hooks/')){
   if(method!=='POST')return json({error:'Method not allowed'},405);
   return receiveEvent(req,url.pathname.slice('/api/v1/hooks/'.length),await bodyOf(req));
