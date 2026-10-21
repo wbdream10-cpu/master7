@@ -32,7 +32,7 @@ export async function POST(req:Request){
  if(!data||typeof data!=='object')return json({error:'请求格式错误'},400);
  const now=new Date().toISOString(),id=crypto.randomUUID();
  try{
-  const {owner,db,tenantId}=await context(user,req);
+  const {owner,db,tenantId,brand}=await context(user,req);
   if(data.action==='create-ticket'){
    const subject=field(data.subject,120),body=field(data.body,4000);
    const [total]=await db.select({n:count()}).from(tickets).where(and(eq(tickets.tenantId,tenantId),eq(tickets.userId,user.userId),gte(tickets.createdAt,new Date(Date.now()-86400000).toISOString())));
@@ -42,6 +42,10 @@ export async function POST(req:Request){
   if(!owner)return json({error:'仅老板可执行此操作'},403);
   if(data.action==='create-brand'){
    const name=field(data.name,60);await db.batch([db.insert(brands).values({id,name,createdAt:now}),db.insert(audit).values({id:crypto.randomUUID(),tenantId,actor:user.email,action:'创建品牌：'+name,createdAt:now})]);return json({ok:true,tenantId:id});
+  }else if(data.action==='save-logo'){
+   if(typeof data.logo!=='string'||data.logo.length>1000)return json({error:'Logo 地址无效'},400);
+   if(data.logo){try{const u=new URL(data.logo);if(u.protocol!=='https:'||u.username||u.password)throw Error();}catch{return json({error:'Logo 仅支持 HTTPS 图片地址'},400);}}
+   await db.batch([db.insert(brands).values({...brand,id:tenantId,logo:data.logo,createdAt:now}).onConflictDoUpdate({target:brands.id,set:{logo:data.logo}}),db.insert(audit).values({id:crypto.randomUUID(),tenantId,actor:user.email,action:'更新 Logo',createdAt:now})]);
   }else if(data.action==='save-brand'){
    const name=field(data.name,60),tagline=field(data.tagline,150);
    if(typeof data.color!=='string'||!/^#[0-9a-fA-F]{6}$/.test(data.color))return json({error:'请输入有效的六位主题色'},400);

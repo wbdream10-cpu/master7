@@ -19,6 +19,10 @@ try{
  let r=await form('/auth/register',{username:'alice',email:'alice@example.test',password});assert.equal(r.status,200);let aliceRecovery=(await r.text()).match(/<code class="recovery">([^<]+)/)[1];
  assert.equal((await form('/auth/login',{username:'alice',password})).status,401);
  r=await form('/auth/login',{username:'owner',password});assert.equal(r.status,303);const ownerCookie=session(r);assert(r.headers.get('set-cookie').includes('HttpOnly'));assert(r.headers.get('set-cookie').includes('SameSite=Lax'));
+ const initial=await (await get(ownerCookie)).json();assert.equal(initial.notices.length,0);assert.equal(initial.tickets.length,0);assert.equal(initial.audit.length,0);assert.equal(initial.members.length,0);
+ assert.equal((await post({action:'save-logo',logo:'http://invalid.test/logo.png'},ownerCookie)).status,400);
+ assert.equal((await post({action:'save-logo',logo:'https://example.test/logo.png',name:'Must stay unchanged',color:'#000000'},ownerCookie)).status,200);
+ const branded=await (await get(ownerCookie)).json();assert.equal(branded.brand.logo,'https://example.test/logo.png');assert.equal(branded.brand.name,initial.brand.name);assert.equal(branded.brand.color,initial.brand.color);
  const {sql}=await import('./runtime.mjs');const alice=sql.prepare("SELECT * FROM portal_users WHERE username='alice'").get();assert.notEqual(alice.password_hash,password);assert.notEqual(alice.recovery_hash,aliceRecovery);
  assert.equal((await form('/accounts/approve',{id:alice.id},ownerCookie)).status,303);
  r=await form('/auth/login',{username:'alice',password});assert.equal(r.status,303);const aliceCookie=session(r);
