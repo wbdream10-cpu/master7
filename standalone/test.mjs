@@ -5,7 +5,11 @@ import {mkdtempSync,rmSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawn} from 'node:child_process';
+delete process.env.PORTAL_POSTGRES_URL;delete process.env.RENDER;process.env.NODE_ENV='test';
+const postgresTest=process.argv.includes('--postgres');
+if(postgresTest)process.env.PORTAL_TEST_POSTGRES='1';else delete process.env.PORTAL_TEST_POSTGRES;
 const dir=mkdtempSync(join(tmpdir(),'portal-test-'));process.env.PORTAL_DATABASE=join(dir,'portal.sqlite');process.env.PUBLIC_ORIGIN='http://127.0.0.1:8080';
+if(postgresTest)process.env.PORTAL_TEST_POSTGRES_PATH=join(dir,'pgdata');
 const password='Test-only-password-7823';let ownerRecovery='';
 await new Promise((resolve,reject)=>{const child=spawn(process.execPath,['standalone/admin.mjs','create-owner','owner','owner@example.test'],{env:process.env,stdio:['pipe','pipe','pipe']});let out='',err='';child.stdout.on('data',d=>out+=d);child.stderr.on('data',d=>err+=d);child.on('close',code=>{if(code)return reject(Error(err));ownerRecovery=out.trim().split('\n').at(-1);resolve()});child.stdin.end(password+'\n')});
 const {server}=await import('./server.mjs');await new Promise(r=>server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+server.address().port;
@@ -25,7 +29,10 @@ try{
  assert.equal((await post({action:'save-logo',logo:'http://invalid.test/logo.png'},ownerCookie)).status,400);
  assert.equal((await post({action:'save-logo',logo:'https://example.test/logo.png',name:'Must stay unchanged',color:'#000000'},ownerCookie)).status,200);
  const branded=await (await get(ownerCookie)).json();assert.equal(branded.brand.logo,'https://example.test/logo.png');assert.equal(branded.brand.name,initial.brand.name);assert.equal(branded.brand.color,initial.brand.color);
- const {sql}=await import('./runtime.mjs');const alice=sql.prepare("SELECT * FROM portal_users WHERE username='alice'").get();assert.notEqual(alice.password_hash,password);assert.notEqual(alice.recovery_hash,aliceRecovery);
+ const {sql,withStorage}=await import('./runtime.mjs');
+ await assert.rejects(withStorage(async()=>{await sql.exec('BEGIN IMMEDIATE');await sql.prepare('INSERT INTO brands(id,name,created_at) VALUES (?,?,?)').run('rollback-check','Must not persist',new Date().toISOString());throw Error('Force rollback');}));
+ assert.equal(await sql.prepare('SELECT id FROM brands WHERE id=?').get('rollback-check'),undefined);
+ const alice=(await sql.prepare("SELECT * FROM portal_users WHERE username='alice'").get());assert.notEqual(alice.password_hash,password);assert.notEqual(alice.recovery_hash,aliceRecovery);
  assert.equal((await form('/accounts/approve',{id:alice.id},ownerCookie)).status,303);
  r=await form('/auth/login',{username:'alice',password});assert.equal(r.status,303);const aliceCookie=session(r);
  const depositPost=(cookie,data,tenant='')=>req('/api/v1/deposit-requests'+(tenant?'?tenant='+tenant:''),{method:'POST',headers:{origin:process.env.PUBLIC_ORIGIN,'content-type':'application/json','x-portal-request':'1',cookie},body:JSON.stringify(data)});
@@ -39,7 +46,7 @@ try{
  submitted=await depositPost(aliceCookie,depositPayload);assert.equal(submitted.status,200);assert.equal((await submitted.json()).duplicate,true);
  assert.equal((await depositPost(aliceCookie,{...depositPayload,amount:'13.34'})).status,409);
  assert.equal((await (await depositGet(ownerCookie)).json()).requests.length,1);
- assert.equal(sql.prepare('SELECT count(*) AS n FROM portal_deposit_requests').get().n,1);
+ assert.equal((await sql.prepare('SELECT count(*) AS n FROM portal_deposit_requests').get()).n,1);
  assert.equal((await req('/api/v1/deposit-requests',{method:'POST',headers:{origin:'https://evil.test','content-type':'application/json','x-portal-request':'1',cookie:aliceCookie},body:JSON.stringify(depositPayload)})).status,403);
  assert.equal((await req('/admin',{headers:{cookie:aliceCookie}})).status,403);assert.equal((await req('/accounts',{headers:{cookie:aliceCookie}})).status,403);
  assert.equal((await post({action:'save-brand',name:'Bad',tagline:'Bad',color:'#123456',logo:''},aliceCookie)).status,403);
@@ -75,22 +82,22 @@ try{
  let eventResponse=await hook();assert.equal(eventResponse.status,202);assert.equal((await eventResponse.json()).processed,false);
  eventResponse=await hook();assert.equal(eventResponse.status,202);assert.equal((await eventResponse.json()).duplicate,true);
  assert.equal((await hook('event-1',JSON.stringify({type:'service.updated',data:{reference:'changed'}}))).status,409);
- assert.equal(sql.prepare('SELECT count(*) AS n FROM portal_events').get().n,1);
+ assert.equal((await sql.prepare('SELECT count(*) AS n FROM portal_events').get()).n,1);
  assert.equal((await connectionPost({...conf,enabled:false})).status,200);assert.equal((await hook('event-2')).status,503);
  assert.equal((await req('/connections',{headers:{cookie:ownerCookie}})).status,200);
  const assets=await req('/assets/client.js');assert.equal(assets.status,200);
  for(let i=0;i<10;i++)assert.equal((await form('/auth/login',{username:'missing',password})).status,401);
  assert.equal((await form('/auth/login',{username:'missing',password})).status,429);
  assert.equal((await form('/accounts/approve',{id:alice.id},ownerCookie,'https://evil.test')).status,403);
- sql.prepare('VACUUM INTO ?').run(join(dir,'snapshot.sqlite'));
+ if(!postgresTest){ (await sql.prepare('VACUUM INTO ?').run(join(dir,'snapshot.sqlite')));
  const {DatabaseSync}=await import('node:sqlite');const snapshot=new DatabaseSync(join(dir,'snapshot.sqlite'));assert.equal(snapshot.prepare('SELECT count(*) AS n FROM tickets').get().n,1);snapshot.close();
- const reopened=new DatabaseSync(process.env.PORTAL_DATABASE);assert.equal(reopened.prepare('SELECT count(*) AS n FROM tickets').get().n,1);reopened.close();
+ const reopened=new DatabaseSync(process.env.PORTAL_DATABASE);assert.equal(reopened.prepare('SELECT count(*) AS n FROM tickets').get().n,1);reopened.close();}
  assert.equal((await form('/accounts/tenant',{tenantId:'alpha'},ownerCookie)).status,303);
  assert.equal((await form('/accounts/tenant',{tenantId:'beta'},ownerCookie)).status,303);
  const ids={};
  for(const username of ['tenantboss','staffmember','tenantclient','outsideclient']){
   assert.equal((await form('/auth/register',{username,email:username+'@example.test',password})).status,200);
-  ids[username]=sql.prepare('SELECT id FROM portal_users WHERE username=?').get(username).id;
+  ids[username]=(await sql.prepare('SELECT id FROM portal_users WHERE username=?').get(username)).id;
   assert.equal((await form('/accounts/approve',{id:ids[username]},ownerCookie)).status,303);
  }
  for(const [name,role] of [['tenantboss','tenant_owner'],['staffmember','employee'],['tenantclient','customer']])assert.equal((await form('/accounts/role',{id:ids[name],tenantId:'alpha',role},ownerCookie)).status,303);
@@ -140,6 +147,14 @@ try{
  assert.equal((await form('/auth/login',{username:'owner',password})).status,401);
  assert.equal((await form('/auth/reset',{username:'owner',recovery:ownerRecovery,password:'Other-owner-password-1001'})).status,400);
  const changedOwner=session(await form('/auth/login',{username:'owner',password:'Changed-owner-password-8901'}));assert.equal((await get(changedOwner)).status,200);
- sql.prepare('UPDATE portal_sessions SET expires_at=0').run();assert.equal((await get(ownerCookie)).status,401);
- console.log('PASS: real local HTTP registration/pending approval/login; owner approval; password hashing; session cookie security; unauthenticated rejection; customer/admin separation; request/reply persistence; tenant isolation; recovery rotation and session revocation; logout; suspension; expired sessions; CSP; built assets; headquarters provisioning; tenant owner isolation; employee restrictions; cross-tenant denial; role-change session revocation; Deposit request validation, exact minor units, idempotency and isolation; password change, old-session invalidation and recovery rotation. Temporary test database only.');
-}finally{await new Promise(r=>server.close(r));const {sql}=await import('./runtime.mjs');sql.close();rmSync(dir,{recursive:true,force:true});}
+ (await sql.prepare('UPDATE portal_sessions SET expires_at=0').run());assert.equal((await get(ownerCookie)).status,401);
+ if(postgresTest){
+  const expected=Number((await sql.prepare('SELECT count(*) AS n FROM tickets').get()).n);
+  await sql.close();
+  await new Promise((resolve,reject)=>{
+   const code="import {PGlite} from '@electric-sql/pglite';const db=new PGlite(process.env.PORTAL_TEST_POSTGRES_PATH);const r=await db.query('SELECT count(*) AS n FROM portal_private.tickets');if(Number(r.rows[0].n)!==Number(process.env.PORTAL_EXPECTED_TEST_TICKETS))throw Error('Postgres persistence mismatch');await db.close();";
+   const child=spawn(process.execPath,['--input-type=module','-e',code],{env:{...process.env,PORTAL_EXPECTED_TEST_TICKETS:String(expected)},stdio:['ignore','ignore','pipe']});let error='';child.stderr.on('data',d=>error+=d);child.on('close',status=>status?reject(Error(error)):resolve());child.on('error',reject);
+  });
+ }
+ console.log('PASS ['+(postgresTest?'PostgreSQL/PGlite':'SQLite')+']: real local HTTP registration/pending approval/login; owner approval; password hashing; session cookie security; unauthenticated rejection; customer/admin separation; request/reply persistence; tenant isolation; recovery rotation and session revocation; logout; suspension; expired sessions; CSP; built assets; headquarters provisioning; tenant owner isolation; employee restrictions; cross-tenant denial; role-change session revocation; Deposit request validation, exact minor units, idempotency and isolation; password change, old-session invalidation and recovery rotation. Temporary test database only.');
+}finally{await new Promise(r=>server.close(r));const {sql}=await import('./runtime.mjs');(await sql.close());rmSync(dir,{recursive:true,force:true});}

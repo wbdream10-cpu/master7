@@ -10,15 +10,20 @@
 npm ci --include=dev
 npm run build
 npm test
+npm run test:postgres
 ```
 
 源码不依赖 ChatGPT 登录或 Sites 运行环境。数据库迁移只创建表，不导入任何旧数据。测试使用临时数据库，结束后删除测试数据。
 
-## Render
+## Render 与云端数据库
 
-仓库根目录的 `render.yaml` 定义新服务 `ahbi-service-portal`，新加坡、0.5 CPU/512 MB、1 GB 持久磁盘，数据库 `/var/data/portal.sqlite`。这是需要付费实例与磁盘的配置，并非免费方案。用户当前要求免绑银行卡、不产生付费资源；此前的预算不作为当前部署授权。禁止直接部署此付费 Blueprint，也禁止将生产数据库放在临时磁盘。
+仓库根目录的 `render.yaml` 已改为新加坡免费 Node Web Service `ahbi-service-portal`，无付费持久磁盘。数据使用外部 PostgreSQL；配置不是部署证明，也不保证账号一定有可用免费配额。
 
-免绑卡部署尚未适配完成。当前代码使用 Node.js HTTP 服务和本地 SQLite，迁移到其他运行环境必须完成数据持久化与账号安全验证，不能只修改套餐名称。若未来另行获准使用付费配置，才可在 ahbi 工作区导入该 Blueprint。结构验证通过不代表部署成功。初始没有老板默认密码，必须在服务的受信任 Shell 中亲自创建老板账号。不可直接把数据库、密码或恢复码提交到 GitHub。
+已创建独立 Supabase 项目 `ahbi-service-portal`（新加坡，项目 ID `aarihmvlnlssxulktbmb`），创建时工具报价 US$0/月。仅建立 `portal_private` 下的 13 张空表；未创建生产账号、导入旧数据或连接实际外部服务。
+
+正式启动必须安全配置 `PORTAL_POSTGRES_URL`。它是服务器秘密，不能发到聊天、提交 GitHub 或放入前端。服务端强制 TLS 证书校验；需要专用 CA 时另设置 `PORTAL_POSTGRES_CA_FILE`。Render 缺少数据库 URL 时直接拒绝启动，防止误用临时 SQLite。完整步骤、权限和验证限制见 [PostgreSQL 云端说明](docs/POSTGRES.md)。
+
+首次老板开户仍在受信任环境中使用安全输入；创建账号和启动必须使用同一数据库环境配置。示例为 Bash，不能把占位邮箱当成真实账号：
 
 ```sh
 read -rs -p '老板密码：' portal_password
@@ -26,7 +31,7 @@ printf '%s' "$portal_password" | node standalone/admin.mjs create-owner boss own
 unset portal_password
 ```
 
-把示例邮箱替换为自己的邮箱。此命令从标准输入读取密码，只显示一次恢复码。密码至少 12 个字符；自行离线保存恢复码。已有老板时命令拒绝覆盖。
+此命令从标准输入读取密码，只显示一次恢复码；已有老板时拒绝覆盖。创建的生产账号和密码不包含在本仓库。
 
 ## 入口
 
@@ -49,13 +54,15 @@ unset portal_password
 ## 备份
 
 ```sh
-node standalone/admin.mjs backup /var/data/portal-backup.sqlite
+node standalone/admin.mjs backup /PRIVATE_BACKUP_PATH/portal-backup.sqlite
 ```
 
-目标必须不存在。备份含敏感账号信息，需私密保存并下载至受控备份位置；同一磁盘内的副本不能替代异地备份。恢复前停止服务、备份当前文件，经审核后恢复快照，并撤销旧会话。
+以上命令仅用于本地 SQLite；PostgreSQL 使用受信任环境中的 pg_dump，详见云端说明。目标必须不存在。备份含敏感账号信息，需私密保存并下载至受控备份位置；同一磁盘内的副本不能替代异地备份。恢复前停止服务、备份当前文件，经审核后恢复快照，并撤销旧会话。
 
 ## 交付状态与范围
 
-本仓库提供可运行源码与部署配置；GitHub 上传不代表已在 Render 上线。正式服务部署、生产老板开户、正式域名、手机与多用户运行、备份恢复仍需实机验收。没有旧站数据迁移、照片、外部供应商适配、实际收付款、余额、支付订单或短信/邮件 OTP。通用回调不会冒充任何供应商协议。真实接入由接手人员另行实现并测试。
+本仓库提供可运行源码、SQLite/PostgreSQL 两种存储适配与部署配置；GitHub 上传不代表已在 Render 上线。正式服务部署、生产老板开户、正式域名、手机与多用户运行、备份恢复仍需实机验收。没有旧站数据迁移、照片、外部供应商适配、实际收付款、余额、支付订单或短信/邮件 OTP。通用回调不会冒充任何供应商协议。真实接入由接手人员另行实现并测试。
 
 账号安全入口要求当前密码及新密码确认；成功后退出所有会话、使旧恢复码失效，并仅显示一次新恢复码。没有邮件或短信发送，不能将人工批准或恢复码当成 OTP。
+
+SQLite 与嵌入式 PostgreSQL/PGlite 本地 HTTP 回归测试通过，包含事务回滚与数据重新打开检查。Supabase 已验证空表、RLS 与浏览器角色无直接读取权限；真实服务到 Supabase 的网络/TLS/账号连接尚未验证，不等于已经上线。

@@ -9,15 +9,18 @@
   "scripts": {
     "build": "node standalone/build.mjs",
     "start": "node standalone/server.mjs",
-    "test": "node standalone/test.mjs"
+    "test": "node standalone/test.mjs",
+    "test:postgres": "node standalone/test.mjs --postgres"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
+    "lucide-react": "1.31.0",
+    "pg": "8.23.1",
     "react": "19.2.6",
-    "react-dom": "19.2.6",
-    "lucide-react": "1.31.0"
+    "react-dom": "19.2.6"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.10",
     "esbuild": "0.28.0"
   }
 }
