@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: ahbi-service-portal
+    runtime: node
+    region: singapore
+    plan: 0.5c-512mb
+    repo: https://github.com/wbdream10-cpu/master7
+    branch: main
+    autoDeployTrigger: "off"
+    numInstances: 1
+    buildCommand: npx --yes pnpm@11.25.0 install --frozen-lockfile --prod=false && node standalone/build.mjs && node standalone/test.mjs
+    startCommand: PUBLIC_ORIGIN="$RENDER_EXTERNAL_URL" node standalone/server.mjs
+    healthCheckPath: /health
+    disk:
+      name: portal-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "24.19.0"
+      - key: HOST
+        value: "0.0.0.0"
+      - key: PORTAL_DATABASE
+        value: /var/data/portal.sqlite
