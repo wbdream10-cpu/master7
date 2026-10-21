@@ -16,9 +16,9 @@ npm test
 
 ## Render
 
-仓库根目录的 `render.yaml` 定义新服务 `ahbi-service-portal`，新加坡、0.5 CPU/512 MB、1 GB 持久磁盘，数据库 `/var/data/portal.sqlite`。基本费用采用用户已批准的约 US$7.25/月预算；实际以 Render 显示为准。禁止将生产数据库放在临时磁盘。
+仓库根目录的 `render.yaml` 定义新服务 `ahbi-service-portal`，新加坡、0.5 CPU/512 MB、1 GB 持久磁盘，数据库 `/var/data/portal.sqlite`。这是需要付费实例与磁盘的配置，并非免费方案。用户当前要求免绑银行卡、不产生付费资源；此前的预算不作为当前部署授权。禁止直接部署此付费 Blueprint，也禁止将生产数据库放在临时磁盘。
 
-在 ahbi 工作区导入该 Blueprint，先检查配置和费用再部署。结构验证通过不代表部署成功。初始没有老板默认密码，必须在服务的受信任 Shell 中亲自创建老板账号。不可直接把数据库、密码或恢复码提交到 GitHub。
+免绑卡部署尚未适配完成。当前代码使用 Node.js HTTP 服务和本地 SQLite，迁移到其他运行环境必须完成数据持久化与账号安全验证，不能只修改套餐名称。若未来另行获准使用付费配置，才可在 ahbi 工作区导入该 Blueprint。结构验证通过不代表部署成功。初始没有老板默认密码，必须在服务的受信任 Shell 中亲自创建老板账号。不可直接把数据库、密码或恢复码提交到 GitHub。
 
 ```sh
 read -rs -p '老板密码：' portal_password
