@@ -1,32 +1,35 @@
-# Example Webhook Receiver
+# Service Portal
 
-This basic example receives webhooks and logs the payload.
-It will fetch service, Postgres, or Key Value store information from the RENDER API for certain webhook types.
+独立普通服务平台，只有顾客前台与老板后台。无游戏、博彩、交易、支付、钱包、供应商接口或旧站数据。
 
-## Prerequisites
-If you haven't already, [sign up for a Render account](https://dashboard.render.com/register).
-Creating webhooks on Render requires a Professional plan or higher. You can [view and upgrade your plan](https://dashboard.render.com/billing/update-plan) in the Render Dashboard.
+## 功能
+- `/` 顾客首页、已发布公告、个人服务申请及处理回复。
+- `/admin` 老板概览、公告编辑/草稿/发布/撤下、申请状态及回复、最近 50 条操作记录、品牌与成员管理。
+- 品牌名称、欢迎语、HTTPS Logo 和主题色可配置。老板可创建品牌和按邮箱分配顾客归属；分配不会发送邀请或授予托管访问权限。
+- 公告、申请和管理日志按品牌隔离；顾客品牌由服务端邮箱归属确定，不能用 URL 参数覆盖。未分配顾客使用默认 main 品牌。全局老板可切换品牌，没有品牌独立管理员角色。
+- `/api/portal` 服务端身份认证、老板权限校验、按用户隔离申请、来源校验、字段限制。
+- Cloudflare D1 持久保存品牌、成员归属、公告、申请和管理日志。数据不使用浏览器 localStorage。
 
-## Deploy to Render
+## 身份及权限
+此版本使用 Sites 托管 ChatGPT 登录，不是独立 ID/密码会员系统。当前发布保持仅项目所有者可访问；顾客对外访问和第二账号验证尚未完成。老板身份由运行时 `PORTAL_OWNER_EMAIL` 配置确定，无首次登录自动授予管理员。不得将整个应用改为公开以绕过访问验证。
 
-1. Use the button below to deploy to Render </br>
-<a href="https://render.com/deploy?repo=https://github.com/render-examples/webhook-receiver/tree/main"><img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render"></a>
+## 配置与部署
+- 源码项目身份见 `.openai/hosting.json`。
+- D1 绑定为 `DB`，表结构及迁移见 `db/schema.ts`、`drizzle/`。
+- 使用 Sites 原生运行时变量设置 `PORTAL_OWNER_EMAIL`，不在源码写入账号或密码。
+- 安装依赖后运行 TypeScript 检查和 Sites 构建；迁移由发布流程应用。
+- 不自动绑定 master7.vip、master7.best，也不修改旧 MASTER7 项目。
 
-2. Follow [instructions](https://render.com/docs/webhooks) to create a webhook with the URL from your service and `/webhook` path
-3. Follow [instructions](https://render.com/docs/api#1-create-an-api-key) to create a Render API Key
-4. Set `RENDER_WEBHOOK_SECRET` environment variable to the secret from the webhook created in step 2. SET `RENDER_API_KEY` to the key created in step 3.
-5. Trigger a service deploy and watch the webhooks roll in.
+## 尚未实现
+独立注册/密码找回、WhatsApp/SMS OTP、独立域名、三语切换、附件上传和邮件通知。本版本不得描述为原 MASTER7 平台完整迁移。
 
-## Developing
+## 验证记录
+2026-10-21：TypeScript 检查、正式构建通过。`node scripts/check-portal.mjs` 使用临时内存 SQLite 和模拟身份测试，覆盖未登录拒绝、来源校验、管理员专属操作、字段校验、申请写入、顾客隔离、草稿隐藏、老板回复及状态、审计记录隐私及每日提交上限。模拟测试不代表真实托管登录或多账号线上流程已经验收。
 
-Once you've created a project and installed dependencies with `pnpm install`, start a development server:
+2026-10-21 补充测试：品牌设置持久保存、非 HTTPS Logo 拒绝、租户读写范围、跨租户编辑拒绝、成员归属冲突、顾客 URL 参数越权拒绝；全部本地通过。真实第二账号及顾客公开访问仍未验收。
 
-```bash
-pnpm run dev
-```
+## 独立账号密码运行目标（2026-10-21 新增）
 
-## Building
+`standalone/README.md` 是独立 Node/SQLite 运行版的权威安装与交接说明。它复用同一套顾客前台、老板后台和业务 API，通过本地数据库会话认证，不使用 ChatGPT 登录。已实现注册审批、平台账号密码、退出、会话过期、一次性恢复码重设及账号管理。Sites 线上目标仍使用托管登录；两个运行目标不可混淆。独立目标尚未部署到生产服务器或正式域名。
 
-```bash
-pnpm run build
-```
+独立运行目标要求 Node.js 24.19+、HTTPS 反向代理和持久磁盘，不能直接部署到 Cloudflare Pages/Workers。测试使用临时本地数据库及真实 HTTP 请求，不触碰用户生产数据。未接入游戏、支付、钱包或任何供应商服务。

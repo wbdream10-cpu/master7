@@ -1,0 +1,7 @@
+import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
+export const notices=sqliteTable('notices',{id:text('id').primaryKey(),tenantId:text('tenant_id').notNull().default('main'),title:text('title').notNull(),body:text('body').notNull(),published:integer('published',{mode:'boolean'}).notNull().default(false),createdAt:text('created_at').notNull()});
+export const tickets=sqliteTable('tickets',{id:text('id').primaryKey(),tenantId:text('tenant_id').notNull().default('main'),userId:text('user_id').notNull(),name:text('name').notNull(),subject:text('subject').notNull(),body:text('body').notNull(),status:text('status').notNull().default('待处理'),reply:text('reply').notNull().default(''),createdAt:text('created_at').notNull()});
+export const audit=sqliteTable('audit',{id:text('id').primaryKey(),tenantId:text('tenant_id').notNull().default('main'),actor:text('actor').notNull(),action:text('action').notNull(),createdAt:text('created_at').notNull()});
+
+export const brands=sqliteTable('brands',{id:text('id').primaryKey(),name:text('name').notNull(),tagline:text('tagline').notNull().default('欢迎来到服务中心'),color:text('color').notNull().default('#2165e8'),logo:text('logo').notNull().default(''),createdAt:text('created_at').notNull()});
+export const members=sqliteTable('members',{email:text('email').primaryKey(),tenantId:text('tenant_id').notNull(),createdAt:text('created_at').notNull()});
