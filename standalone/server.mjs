@@ -6,6 +6,7 @@ import {pathToFileURL} from 'node:url';
 import {identity,sql} from './runtime.mjs';
 import {digest,secret,passwordValid,hashPassword,verifyPassword,limited,sessionUser,newSession} from './security.mjs';
 import * as api from './dist/api.mjs';
+import {listConnections,configureConnection,receiveEvent,listEvents} from './connections.mjs';
 const origin=new URL(process.env.PUBLIC_ORIGIN||'http://127.0.0.1:8080');
 if(origin.protocol!=='https:'&&!['127.0.0.1','localhost','[::1]'].includes(origin.hostname))throw Error('PUBLIC_ORIGIN must use HTTPS outside local development.');
 const cookieFlags='; Path=/; HttpOnly; SameSite=Lax'+(origin.protocol==='https:'?'; Secure':'');
@@ -19,8 +20,34 @@ const json=(data,status=200)=>Response.json(data,{status});
 async function bodyOf(req){let size=0;const chunks=[];for await(const c of req){size+=c.length;if(size>16384)throw Error('TOO_LARGE');chunks.push(c)}return Buffer.concat(chunks)}
 function log(user,action){sql.prepare('INSERT INTO audit(id,tenant_id,actor,action,created_at) VALUES (?,?,?,?,?)').run(randomUUID(),'main',user.email,action,new Date().toISOString())}
 function accountsPage(){const users=sql.prepare('SELECT id,username,email,role,approved,created_at FROM portal_users ORDER BY created_at DESC LIMIT 300').all();return page('账号管理',`<main class="accounts"><div class="page-heading"><div><p class="eyebrow">OWNER / ACCOUNT MANAGEMENT</p><h1>平台账号管理</h1><p>仅老板可以批准账号。核实账号和邮箱属于申请人后再批准。</p></div><a class="secondary" href="/admin">返回老板后台</a></div>${users.map(u=>`<section class="account-row"><b>${escape(u.username)}</b><p>${escape(u.email)} · ${u.role==='owner'?'老板':u.approved?'已批准':'等待批准'}</p>${u.role==='customer'?`<form method="post" action="/accounts/${u.approved?'suspend':'approve'}"><input type="hidden" name="id" value="${escape(u.id)}"><button class="${u.approved?'secondary':'primary'}">${u.approved?'暂停账号并撤销登录':'批准此账号'}</button></form>`:''}</section>`).join('')}</main>`)}
+function connectionsPage(){const rows=listConnections(),events=listEvents();return page('通用接口管理',`<main class="accounts"><div class="page-heading"><div><p class="eyebrow">OWNER / CONNECTIONS</p><h1>通用接口管理</h1><p>未配置任何外部服务。接收记录不代表业务已处理。</p></div><a class="secondary" href="/admin">返回老板后台</a></div><section class="account-row"><h2>配置接收通道</h2><form class="settings-form" method="post" action="/connections"><label>连接标识<input name="id" required pattern="[a-z0-9][a-z0-9_-]{2,39}" maxlength="40"></label><label>工作空间 ID<input name="tenantId" required value="main" maxlength="60"></label><label>签名密钥的环境变量名<input name="keyEnv" required pattern="PORTAL_HOOK_[A-Z0-9_]{3,60}" maxlength="72" placeholder="PORTAL_HOOK_..." autocomplete="off"></label><p>这里只填写环境变量名称，密钥由部署负责人在服务器设置，至少 32 字节。</p><label><input type="checkbox" name="enabled"> 启用接收</label><button class="primary">保存连接</button></form></section><section class="account-row"><h2>已配置连接</h2>${rows.length?rows.map(c=>`<div class="account-row"><b>${escape(c.id)}</b><p>${escape(c.tenantId)} · ${c.enabled?'已启用':'已停用'} · ${c.configured?'密钥已配置':'缺少密钥'}</p><code>${escape(c.callbackPath)}</code><p>密钥变量：${escape(c.keyEnv)}</p><form method="post" action="/connections"><input type="hidden" name="id" value="${escape(c.id)}"><input type="hidden" name="tenantId" value="${escape(c.tenantId)}"><input type="hidden" name="keyEnv" value="${escape(c.keyEnv)}">${c.enabled?'':'<input type="hidden" name="enabled" value="on">'}<button class="secondary">${c.enabled?'停用连接':'启用连接'}</button></form></div>`).join(''):'<p>暂无连接。</p>'}</section><section class="account-row"><h2>最近收到的事件</h2><p>仅显示事件元数据，原始内容不会在这里公开。事件仍待接手人员编写适配器处理。</p>${events.length?events.map(e=>`<div class="account-row"><b>${escape(e.type)}</b><p>${escape(e.connectionId)} · ${escape(e.tenantId)} · ${escape(e.receivedAt)}</p><code>${escape(e.eventId)}</code><p>已接收 / 未处理</p></div>`).join(''):'<p>暂无事件。</p>'}</section></main>`)}
 async function handle(req){const url=new URL(req.url,origin);const user=sessionUser(req.headers.cookie);const method=req.method||'GET';
- if(method==='POST'&&req.headers.origin!==origin.origin)return json({error:'请求来源不受信任'},403);
+ if(method==='POST'&&!url.pathname.startsWith('/api/v1/hooks/')&&req.headers.origin!==origin.origin)return json({error:'请求来源不受信任'},403);
+ if(url.pathname.startsWith('/api/v1/hooks/')){
+  if(method!=='POST')return json({error:'Method not allowed'},405);
+  return receiveEvent(req,url.pathname.slice('/api/v1/hooks/'.length),await bodyOf(req));
+ }
+ if(url.pathname==='/api/v1/me'){
+  if(method!=='GET')return json({error:'Method not allowed'},405);
+  return user?json({id:user.userId,username:user.displayName,role:user.role}):json({error:'Authentication required'},401);
+ }
+ if(url.pathname==='/connections'||url.pathname.startsWith('/api/v1/connections')){
+  if(!user)return url.pathname==='/connections'?redirect('/signin'):json({error:'Authentication required'},401);
+  if(user.role!=='owner')return json({error:'Owner access required'},403);
+  if(method==='GET'&&url.pathname==='/api/v1/connections')return json({connections:listConnections(),events:listEvents()});
+  if(method==='POST'&&url.pathname==='/api/v1/connections'){
+   if(!String(req.headers['content-type']).startsWith('application/json')||req.headers['x-portal-request']!=='1')return json({error:'Invalid request'},415);
+   let data;try{data=JSON.parse((await bodyOf(req)).toString());}catch{return json({error:'Invalid JSON'},400);}
+   return data&&typeof data==='object'&&!Array.isArray(data)?configureConnection(data,user):json({error:'Invalid request'},400);
+  }
+  if(method==='POST'&&url.pathname==='/connections'){
+   if(!String(req.headers['content-type']).startsWith('application/x-www-form-urlencoded'))return json({error:'Invalid request'},415);
+   const f=new URLSearchParams((await bodyOf(req)).toString());const r=configureConnection({id:f.get('id'),tenantId:f.get('tenantId'),keyEnv:f.get('keyEnv'),enabled:f.get('enabled')==='on'},user);
+   return r.ok?redirect('/connections'):r;
+  }
+  if(method==='GET'&&url.pathname==='/connections')return connectionsPage();
+  return json({error:'Not found'},404);
+ }
  if(method==='GET'&&url.pathname==='/health')return json({status:'ok',authentication:'platform-password',externalServices:false});
  if(method==='GET'&&url.pathname.startsWith('/assets/')){const name={'/assets/client.js':['client.js','text/javascript; charset=utf-8'],'/assets/portal.css':['portal.css','text/css; charset=utf-8']}[url.pathname];return name?new Response(readFileSync(resolve('standalone/dist',name[0])),{headers:{'content-type':name[1]}}):new Response('Not found',{status:404})}
  if(method==='GET'&&['/signin','/register','/reset'].includes(url.pathname))return authPage(url.pathname.slice(1));

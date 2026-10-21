@@ -8,7 +8,7 @@ services:
     branch: main
     autoDeployTrigger: "off"
     numInstances: 1
-    buildCommand: npx --yes pnpm@11.25.0 install --frozen-lockfile --prod=false && node standalone/build.mjs && node standalone/test.mjs
+    buildCommand: npm ci --include=dev && npm run build && npm test
     startCommand: PUBLIC_ORIGIN="$RENDER_EXTERNAL_URL" node standalone/server.mjs
     healthCheckPath: /health
     disk:
