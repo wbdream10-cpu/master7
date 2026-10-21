@@ -5,7 +5,7 @@ import { eq,desc,and,gte,count } from 'drizzle-orm';
 import { isOwner } from '../../../lib/access';
 export const dynamic='force-dynamic';
 const json=(data:unknown,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
-const defaultBrand={id:'main',name:'Service Portal',tagline:'欢迎来到服务中心',color:'#2165e8',logo:''};
+const defaultBrand={id:'main',name:'MASTER7',tagline:'欢迎来到服务中心',color:'#2165e8',logo:''};
 async function context(user:{email:string;role?:string;tenantId?:string|null},req?:Request){
  const db=getDb(),headOffice=isOwner(user.email),employee=user.role==='employee',tenantOwner=user.role==='tenant_owner',owner=headOffice||employee||tenantOwner;
  const [member]=await db.select().from(members).where(eq(members.email,user.email.toLowerCase()));
