@@ -72,6 +72,43 @@ try{
  sql.prepare('VACUUM INTO ?').run(join(dir,'snapshot.sqlite'));
  const {DatabaseSync}=await import('node:sqlite');const snapshot=new DatabaseSync(join(dir,'snapshot.sqlite'));assert.equal(snapshot.prepare('SELECT count(*) AS n FROM tickets').get().n,1);snapshot.close();
  const reopened=new DatabaseSync(process.env.PORTAL_DATABASE);assert.equal(reopened.prepare('SELECT count(*) AS n FROM tickets').get().n,1);reopened.close();
+ assert.equal((await form('/accounts/tenant',{tenantId:'alpha'},ownerCookie)).status,303);
+ assert.equal((await form('/accounts/tenant',{tenantId:'beta'},ownerCookie)).status,303);
+ const ids={};
+ for(const username of ['tenantboss','staffmember','tenantclient','outsideclient']){
+  assert.equal((await form('/auth/register',{username,email:username+'@example.test',password})).status,200);
+  ids[username]=sql.prepare('SELECT id FROM portal_users WHERE username=?').get(username).id;
+  assert.equal((await form('/accounts/approve',{id:ids[username]},ownerCookie)).status,303);
+ }
+ for(const [name,role] of [['tenantboss','tenant_owner'],['staffmember','employee'],['tenantclient','customer']])assert.equal((await form('/accounts/role',{id:ids[name],tenantId:'alpha',role},ownerCookie)).status,303);
+ let bossLogin=await form('/auth/login',{username:'tenantboss',password});assert.equal(bossLogin.headers.get('location'),'/admin');const tenantBossCookie=session(bossLogin);
+ const staffCookie=session(await form('/auth/login',{username:'staffmember',password}));
+ const tenantClientCookie=session(await form('/auth/login',{username:'tenantclient',password}));
+ assert.equal((await req('/admin',{headers:{cookie:tenantBossCookie}})).status,200);
+ assert.equal((await req('/admin',{headers:{cookie:staffCookie}})).status,200);
+ const scoped=await (await get(tenantBossCookie)).json();assert.equal(scoped.tenantId,'alpha');assert.equal(scoped.user.role,'tenant_owner');assert.equal(scoped.tenants.length,0);
+ assert.equal((await get(tenantBossCookie,'beta')).status,403);assert.equal((await get(staffCookie,'beta')).status,403);
+ assert.equal((await post({action:'save-notice',title:'No',body:'No',published:true},tenantBossCookie,'beta')).status,403);
+ assert.equal((await post({action:'create-brand',name:'No'},tenantBossCookie)).status,403);
+ assert.equal((await post({action:'save-logo',logo:'https://example.test/alpha.png'},tenantBossCookie)).status,200);
+ assert.equal((await post({action:'save-notice',title:'Alpha message',body:'Only alpha',published:true},tenantBossCookie)).status,200);
+ assert.equal((await post({action:'save-notice',title:'No',body:'No'},staffCookie)).status,403);
+ const workerData=await (await get(staffCookie)).json();assert.equal(workerData.audit.length,0);assert.equal(workerData.members.length,0);
+ assert.equal((await req('/accounts',{headers:{cookie:staffCookie}})).status,403);
+ assert.equal((await req('/api/v1/connections',{headers:{cookie:tenantBossCookie}})).status,403);
+ assert.equal((await req('/api/v1/connections',{headers:{cookie:staffCookie}})).status,403);
+ assert.equal((await form('/accounts/approve',{id:ids.outsideclient},tenantBossCookie)).status,403);
+ assert.equal((await form('/accounts/suspend',{id:ids.staffmember},tenantBossCookie)).status,403);
+ assert.equal((await form('/accounts/tenant',{tenantId:'noaccess'},tenantBossCookie)).status,403);
+ assert.equal((await form('/accounts/role',{id:ids.tenantclient,tenantId:'beta',role:'employee'},ownerCookie)).status,409);
+ assert.equal((await post({action:'create-ticket',subject:'Alpha help',body:'Scoped request'},tenantClientCookie)).status,201);
+ const alphaTicket=(await (await get(tenantClientCookie)).json()).tickets[0].id;
+ assert.equal((await post({action:'update-ticket',id:alphaTicket,status:'已完成',reply:'Handled by employee'},staffCookie)).status,200);
+ assert.equal((await post({action:'update-ticket',id:ticketId,status:'已完成',reply:'No'},staffCookie)).status,404);
+ assert.equal((await form('/accounts/role',{id:ids.staffmember,tenantId:'alpha',role:'customer'},ownerCookie)).status,303);
+ assert.equal((await get(staffCookie)).status,401);
+ const demoted=session(await form('/auth/login',{username:'staffmember',password}));assert.equal((await req('/admin',{headers:{cookie:demoted}})).status,403);
+ assert.equal((await (await get(demoted)).json()).tickets.length,0);
  sql.prepare('UPDATE portal_sessions SET expires_at=0').run();assert.equal((await get(ownerCookie)).status,401);
- console.log('PASS: real local HTTP registration/pending approval/login; owner approval; password hashing; session cookie security; unauthenticated rejection; customer/admin separation; request/reply persistence; tenant isolation; recovery rotation and session revocation; logout; suspension; expired sessions; CSP; built assets. Temporary test database only.');
+ console.log('PASS: real local HTTP registration/pending approval/login; owner approval; password hashing; session cookie security; unauthenticated rejection; customer/admin separation; request/reply persistence; tenant isolation; recovery rotation and session revocation; logout; suspension; expired sessions; CSP; built assets; headquarters provisioning; tenant owner isolation; employee restrictions; cross-tenant denial; role-change session revocation. Temporary test database only.');
 }finally{await new Promise(r=>server.close(r));const {sql}=await import('./runtime.mjs');sql.close();rmSync(dir,{recursive:true,force:true});}

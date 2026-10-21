@@ -18,8 +18,8 @@ function recoveryPage(code,reset=false){return page('保存账号恢复码',`<ma
 const redirect=(path,cookie)=>new Response(null,{status:303,headers:{location:path,...(cookie?{'set-cookie':cookie}:{})}});
 const json=(data,status=200)=>Response.json(data,{status});
 async function bodyOf(req){let size=0;const chunks=[];for await(const c of req){size+=c.length;if(size>16384)throw Error('TOO_LARGE');chunks.push(c)}return Buffer.concat(chunks)}
-function log(user,action){sql.prepare('INSERT INTO audit(id,tenant_id,actor,action,created_at) VALUES (?,?,?,?,?)').run(randomUUID(),'main',user.email,action,new Date().toISOString())}
-function accountsPage(){const users=sql.prepare('SELECT id,username,email,role,approved,created_at FROM portal_users ORDER BY created_at DESC LIMIT 300').all();return page('账号管理',`<main class="accounts"><div class="page-heading"><div><p class="eyebrow">OWNER / ACCOUNT MANAGEMENT</p><h1>平台账号管理</h1><p>仅老板可以批准账号。核实账号和邮箱属于申请人后再批准。</p></div><a class="secondary" href="/admin">返回老板后台</a></div>${users.map(u=>`<section class="account-row"><b>${escape(u.username)}</b><p>${escape(u.email)} · ${u.role==='owner'?'老板':u.approved?'已批准':'等待批准'}</p>${u.role==='customer'?`<form method="post" action="/accounts/${u.approved?'suspend':'approve'}"><input type="hidden" name="id" value="${escape(u.id)}"><button class="${u.approved?'secondary':'primary'}">${u.approved?'暂停账号并撤销登录':'批准此账号'}</button></form>`:''}</section>`).join('')}</main>`)}
+function log(user,action){sql.prepare('INSERT INTO audit(id,tenant_id,actor,action,created_at) VALUES (?,?,?,?,?)').run(randomUUID(),user.tenantId||'main',user.email,action,new Date().toISOString())}
+function accountsPage(user){const head=user.role==='owner';const users=sql.prepare(`SELECT u.id,u.username,u.email,u.role,u.approved,p.role AS staff_role,COALESCE(p.tenant_id,m.tenant_id,'main') AS tenant_id FROM portal_users u LEFT JOIN portal_staff p ON p.user_id=u.id LEFT JOIN members m ON m.email=u.email ${head?'':"WHERE u.role<>'owner' AND COALESCE(p.tenant_id,m.tenant_id,'main')=?"} ORDER BY u.created_at DESC LIMIT 300`).all(...(head?[]:[user.tenantId]));return page('账号与租户管理',`<main class="accounts"><div class="page-heading"><div><p class="eyebrow">ACCOUNT MANAGEMENT</p><h1>${head?'总部账号与租户管理':'本租户账号管理'}</h1></div><a class="secondary" href="/admin">返回后台</a></div>${head?`<section class="account-row"><h2>创建空白租户</h2><form class="settings-form" method="post" action="/accounts/tenant"><label>租户代码<input name="tenantId" required pattern="[a-z0-9][a-z0-9_-]{2,39}" maxlength="40"></label><button class="primary">创建租户</button><p>仅创建空白工作空间，不导入账号或内容。</p></form></section>`:''}${users.map(u=>`<section class="account-row"><b>${escape(u.username)}</b><p>${escape(u.email)} · ${escape(u.tenant_id)} · ${escape(u.role==='owner'?'总部':u.staff_role==='tenant_owner'?'租户老板':u.staff_role==='employee'?'员工':'客户')} · ${u.approved?'已批准':'等待批准'}</p>${u.role!=='owner'&&(head||!u.staff_role)?`<form method="post" action="/accounts/${u.approved?'suspend':'approve'}"><input type="hidden" name="id" value="${escape(u.id)}"><button class="secondary">${u.approved?'暂停并撤销登录':'批准账号'}</button></form>`:''}${head&&u.role!=='owner'?`<form class="settings-form" method="post" action="/accounts/role"><input type="hidden" name="id" value="${escape(u.id)}"><label>租户代码<input name="tenantId" value="${escape(u.tenant_id)}" required maxlength="60"></label><label>职责<select name="role"><option value="customer" ${!u.staff_role?'selected':''}>客户</option><option value="tenant_owner" ${u.staff_role==='tenant_owner'?'selected':''}>租户老板</option><option value="employee" ${u.staff_role==='employee'?'selected':''}>员工</option></select></label><button class="secondary">保存归属与职责并撤销旧登录</button><p>已明确归属其他租户的账号不能直接转移。</p></form>`:''}</section>`).join('')}</main>`)}
 function connectionsPage(){const rows=listConnections(),events=listEvents();return page('通用接口管理',`<main class="accounts"><div class="page-heading"><div><p class="eyebrow">OWNER / CONNECTIONS</p><h1>通用接口管理</h1><p>未配置任何外部服务。接收记录不代表业务已处理。</p></div><a class="secondary" href="/admin">返回老板后台</a></div><section class="account-row"><h2>配置接收通道</h2><form class="settings-form" method="post" action="/connections"><label>连接标识<input name="id" required pattern="[a-z0-9][a-z0-9_-]{2,39}" maxlength="40"></label><label>工作空间 ID<input name="tenantId" required value="main" maxlength="60"></label><label>签名密钥的环境变量名<input name="keyEnv" required pattern="PORTAL_HOOK_[A-Z0-9_]{3,60}" maxlength="72" placeholder="PORTAL_HOOK_..." autocomplete="off"></label><p>这里只填写环境变量名称，密钥由部署负责人在服务器设置，至少 32 字节。</p><label><input type="checkbox" name="enabled"> 启用接收</label><button class="primary">保存连接</button></form></section><section class="account-row"><h2>已配置连接</h2>${rows.length?rows.map(c=>`<div class="account-row"><b>${escape(c.id)}</b><p>${escape(c.tenantId)} · ${c.enabled?'已启用':'已停用'} · ${c.configured?'密钥已配置':'缺少密钥'}</p><code>${escape(c.callbackPath)}</code><p>密钥变量：${escape(c.keyEnv)}</p><form method="post" action="/connections"><input type="hidden" name="id" value="${escape(c.id)}"><input type="hidden" name="tenantId" value="${escape(c.tenantId)}"><input type="hidden" name="keyEnv" value="${escape(c.keyEnv)}">${c.enabled?'':'<input type="hidden" name="enabled" value="on">'}<button class="secondary">${c.enabled?'停用连接':'启用连接'}</button></form></div>`).join(''):'<p>暂无连接。</p>'}</section><section class="account-row"><h2>最近收到的事件</h2><p>仅显示事件元数据，原始内容不会在这里公开。事件仍待接手人员编写适配器处理。</p>${events.length?events.map(e=>`<div class="account-row"><b>${escape(e.type)}</b><p>${escape(e.connectionId)} · ${escape(e.tenantId)} · ${escape(e.receivedAt)}</p><code>${escape(e.eventId)}</code><p>已接收 / 未处理</p></div>`).join(''):'<p>暂无事件。</p>'}</section></main>`)}
 async function handle(req){const url=new URL(req.url,origin);const user=sessionUser(req.headers.cookie);const method=req.method||'GET';
  if(method==='POST'&&!url.pathname.startsWith('/api/v1/hooks/')&&req.headers.origin!==origin.origin)return json({error:'请求来源不受信任'},403);
@@ -64,7 +64,7 @@ async function handle(req){const url=new URL(req.url,origin);const user=sessionU
   const row=sql.prepare('SELECT * FROM portal_users WHERE username=?').get(username);
   if(action==='login'){
    const valid=await verifyPassword(password,row?.password_hash||dummyHash);if(!row||!valid||!row.approved)return authPage('signin','账号、密码错误，或账号尚未批准。',401);
-   return redirect(row.role==='owner'?'/admin':'/','portal_session='+newSession(row.id)+'; Max-Age=28800'+cookieFlags);
+   return redirect(row.role==='owner'||sql.prepare('SELECT user_id FROM portal_staff WHERE user_id=?').get(row.id)?'/admin':'/','portal_session='+newSession(row.id)+'; Max-Age=28800'+cookieFlags);
   }
   if(action==='reset'){
    const code=form.get('recovery')||'';if(!row||code.length>100||digest(code)!==row.recovery_hash||!passwordValid(password))return authPage('reset','账号、恢复码或新密码不正确。',400);
@@ -78,16 +78,38 @@ async function handle(req){const url=new URL(req.url,origin);const user=sessionU
   return identity.run(user,()=>method==='POST'?api.POST(request):api.GET(request));
  }
  if(url.pathname==='/accounts'||url.pathname.startsWith('/accounts/')){
-  if(!user)return redirect('/signin');if(user.role!=='owner')return new Response('无管理权限',{status:403});
-  if(method==='GET'&&url.pathname==='/accounts')return accountsPage();
+  if(!user)return redirect('/signin');if(!['owner','tenant_owner'].includes(user.role))return new Response('无管理权限',{status:403});
+  if(method==='GET'&&url.pathname==='/accounts')return accountsPage(user);
+  if(method==='POST'&&['/accounts/role','/accounts/tenant'].includes(url.pathname)){
+   if(user.role!=='owner')return new Response('仅总部可分配职责',{status:403});
+   const f=new URLSearchParams((await bodyOf(req)).toString()),tenantId=f.get('tenantId')||'';
+   if(url.pathname==='/accounts/tenant'){
+    if(!/^[a-z0-9][a-z0-9_-]{2,39}$/.test(tenantId)||tenantId==='main')return json({error:'租户代码无效'},400);
+    if(sql.prepare('SELECT id FROM brands WHERE id=?').get(tenantId))return json({error:'租户已存在'},409);
+    const now=new Date().toISOString();sql.exec('BEGIN IMMEDIATE');try{sql.prepare('INSERT INTO brands(id,name,created_at) VALUES (?,?,?)').run(tenantId,tenantId,now);log(user,'创建租户：'+tenantId);sql.exec('COMMIT');}catch(e){sql.exec('ROLLBACK');throw e;}return redirect('/accounts');
+   }
+   const id=f.get('id')||'',role=f.get('role')||'';
+   if(!['tenant_owner','employee','customer'].includes(role))return json({error:'职责无效'},400);
+   const target=sql.prepare("SELECT id,email FROM portal_users WHERE id=? AND role='customer'").get(id);
+   if(!target)return json({error:'账号不存在'},404);
+   if(tenantId!=='main'&&!sql.prepare('SELECT id FROM brands WHERE id=?').get(tenantId))return json({error:'租户不存在'},404);
+   const membership=sql.prepare('SELECT tenant_id FROM members WHERE email=?').get(target.email),staff=sql.prepare('SELECT tenant_id FROM portal_staff WHERE user_id=?').get(id);
+   if((membership&&membership.tenant_id!==tenantId)||(staff&&staff.tenant_id!==tenantId))return json({error:'账号已归属其他租户，不能直接转移'},409);
+   sql.exec('BEGIN IMMEDIATE');try{
+    sql.prepare('INSERT INTO members(email,tenant_id,created_at) VALUES (?,?,?) ON CONFLICT(email) DO NOTHING').run(target.email,tenantId,new Date().toISOString());
+    if(role==='customer')sql.prepare('DELETE FROM portal_staff WHERE user_id=?').run(id);else sql.prepare('INSERT INTO portal_staff VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET role=excluded.role').run(id,tenantId,role);
+    sql.prepare('DELETE FROM portal_sessions WHERE user_id=?').run(id);log(user,'分配职责：'+target.email+' / '+tenantId+' / '+role);sql.exec('COMMIT');
+   }catch(e){sql.exec('ROLLBACK');throw e;}return redirect('/accounts');
+  }
   if(method==='POST'&&['/accounts/approve','/accounts/suspend'].includes(url.pathname)){
    const f=new URLSearchParams((await bodyOf(req)).toString()),id=f.get('id')||'',approve=url.pathname.endsWith('approve');
-   const target=sql.prepare("SELECT id,username FROM portal_users WHERE id=? AND role='customer'").get(id);if(!target)return new Response('账号不存在',{status:404});
+   const target=sql.prepare("SELECT u.id,u.username,p.role AS staff_role,COALESCE(p.tenant_id,m.tenant_id,'main') AS tenant_id FROM portal_users u LEFT JOIN portal_staff p ON p.user_id=u.id LEFT JOIN members m ON m.email=u.email WHERE u.id=? AND u.role='customer'").get(id);if(!target)return new Response('账号不存在',{status:404});
+   if(user.role==='tenant_owner'&&(target.tenant_id!==user.tenantId||target.staff_role))return json({error:'仅可管理本租户客户'},403);
    sql.exec('BEGIN IMMEDIATE');try{sql.prepare('UPDATE portal_users SET approved=? WHERE id=?').run(approve?1:0,id);sql.prepare('DELETE FROM portal_sessions WHERE user_id=?').run(id);log(user,(approve?'批准账号：':'暂停账号：')+target.username);sql.exec('COMMIT')}catch(e){sql.exec('ROLLBACK');throw e;}return redirect('/accounts');
   }return new Response('Not found',{status:404});
  }
  if(method==='GET'&&['/','/admin'].includes(url.pathname)){
-  if(!user)return redirect('/signin');if(url.pathname==='/admin'&&user.role!=='owner')return new Response('无管理权限',{status:403});
+  if(!user)return redirect('/signin');if(url.pathname==='/admin'&&!['owner','tenant_owner','employee'].includes(user.role))return new Response('无管理权限',{status:403});
   return page('服务中心','<div id="root"></div><script type="module" src="/assets/client.js"></script>');
  }
  return new Response('Not found',{status:404});

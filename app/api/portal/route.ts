@@ -6,20 +6,21 @@ import { isOwner } from '../../../lib/access';
 export const dynamic='force-dynamic';
 const json=(data:unknown,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
 const defaultBrand={id:'main',name:'Service Portal',tagline:'欢迎来到服务中心',color:'#2165e8',logo:''};
-async function context(user:{email:string},req?:Request){
- const db=getDb(),owner=isOwner(user.email);
+async function context(user:{email:string;role?:string;tenantId?:string|null},req?:Request){
+ const db=getDb(),headOffice=isOwner(user.email),employee=user.role==='employee',tenantOwner=user.role==='tenant_owner',owner=headOffice||employee||tenantOwner;
  const [member]=await db.select().from(members).where(eq(members.email,user.email.toLowerCase()));
  const selected=req?new URL(req.url).searchParams.get('tenant'):null;
- const tenantId=owner?(selected||'main'):(member?.tenantId||'main');
+ if((employee||tenantOwner)&&(!user.tenantId||(selected&&selected!==user.tenantId)))throw new Error('TENANT_FORBIDDEN');
+ const tenantId=headOffice?(selected||'main'):((employee||tenantOwner)?user.tenantId!:(member?.tenantId||'main'));
  const [brand]=await db.select().from(brands).where(eq(brands.id,tenantId));
  if(!brand&&tenantId!=='main')throw new Error('TENANT_NOT_FOUND');
- return {db,owner,tenantId,brand:brand||defaultBrand};
+ return {db,owner,headOffice,employee,tenantId,brand:brand||defaultBrand};
 }
 export async function GET(req?:Request){
  const user=await getChatGPTUser();if(!user)return json({error:'请先登录'},401);
- try{const {owner,db,tenantId,brand}=await context(user,req);const tenantList=owner?await db.select().from(brands):[];
- return json({user:{name:user.displayName,email:user.email,owner},tenantId,brand,tenants:owner?[...(tenantList.some(b=>b.id==='main')?[]:[defaultBrand]),...tenantList]:[],members:owner?await db.select().from(members).where(eq(members.tenantId,tenantId)):[],notices:await db.select().from(notices).where(and(eq(notices.tenantId,tenantId),owner?undefined:eq(notices.published,true))).orderBy(desc(notices.createdAt)).limit(100),tickets:await db.select().from(tickets).where(and(eq(tickets.tenantId,tenantId),owner?undefined:eq(tickets.userId,user.userId))).orderBy(desc(tickets.createdAt)).limit(200),audit:owner?await db.select().from(audit).where(eq(audit.tenantId,tenantId)).orderBy(desc(audit.createdAt)).limit(50):[]});
- }catch(e){if(e instanceof Error&&e.message==='TENANT_NOT_FOUND')return json({error:'品牌不存在'},404);return json({error:'资料暂时无法读取，请稍后重试。'},503);}
+ try{const {owner,headOffice,employee,db,tenantId,brand}=await context(user,req);const tenantList=headOffice?await db.select().from(brands):[];
+ return json({user:{name:user.displayName,email:user.email,owner,role:user.role||'customer'},tenantId,brand,tenants:headOffice?[...(tenantList.some(b=>b.id==='main')?[]:[defaultBrand]),...tenantList]:[],members:owner&&!employee?await db.select().from(members).where(eq(members.tenantId,tenantId)):[],notices:await db.select().from(notices).where(and(eq(notices.tenantId,tenantId),owner&&!employee?undefined:eq(notices.published,true))).orderBy(desc(notices.createdAt)).limit(100),tickets:await db.select().from(tickets).where(and(eq(tickets.tenantId,tenantId),owner?undefined:eq(tickets.userId,user.userId))).orderBy(desc(tickets.createdAt)).limit(200),audit:owner&&!employee?await db.select().from(audit).where(eq(audit.tenantId,tenantId)).orderBy(desc(audit.createdAt)).limit(50):[]});
+ }catch(e){if(e instanceof Error&&e.message==='TENANT_FORBIDDEN')return json({error:'无权访问其他租户'},403);if(e instanceof Error&&e.message==='TENANT_NOT_FOUND')return json({error:'品牌不存在'},404);return json({error:'资料暂时无法读取，请稍后重试。'},503);}
 }
 
 function field(v:unknown,max:number){if(typeof v!=='string'||!v.trim()||v.length>max)throw new Error('字段为空或超过长度限制');return v.trim();}
@@ -32,7 +33,7 @@ export async function POST(req:Request){
  if(!data||typeof data!=='object')return json({error:'请求格式错误'},400);
  const now=new Date().toISOString(),id=crypto.randomUUID();
  try{
-  const {owner,db,tenantId,brand}=await context(user,req);
+  const {owner,headOffice,employee,db,tenantId,brand}=await context(user,req);
   if(data.action==='create-ticket'){
    const subject=field(data.subject,120),body=field(data.body,4000);
    const [total]=await db.select({n:count()}).from(tickets).where(and(eq(tickets.tenantId,tenantId),eq(tickets.userId,user.userId),gte(tickets.createdAt,new Date(Date.now()-86400000).toISOString())));
@@ -40,6 +41,8 @@ export async function POST(req:Request){
    await db.insert(tickets).values({id,tenantId,userId:user.userId,name:user.displayName,subject,body,createdAt:now});return json({ok:true,id},201);
   }
   if(!owner)return json({error:'仅老板可执行此操作'},403);
+  if(employee&&data.action!=='update-ticket')return json({error:'员工仅可处理本租户服务申请'},403);
+  if(!headOffice&&['create-brand','assign-member','save-brand'].includes(data.action))return json({error:'仅总部可分配租户与成员'},403);
   if(data.action==='create-brand'){
    const name=field(data.name,60);await db.batch([db.insert(brands).values({id,name,createdAt:now}),db.insert(audit).values({id:crypto.randomUUID(),tenantId,actor:user.email,action:'创建品牌：'+name,createdAt:now})]);return json({ok:true,tenantId:id});
   }else if(data.action==='save-logo'){
@@ -75,5 +78,5 @@ export async function POST(req:Request){
    await db.batch([db.update(tickets).set({status:data.status,reply:data.reply.trim()}).where(and(eq(tickets.id,ticketId),eq(tickets.tenantId,tenantId))),db.insert(audit).values({id:crypto.randomUUID(),tenantId,actor:user.email,action:'更新服务申请 '+ticketId.slice(0,8)+'：'+data.status,createdAt:now})]);
   }else return json({error:'操作不存在'},400);
   return json({ok:true});
- }catch(e){if(e instanceof Error&&e.message==='TENANT_NOT_FOUND')return json({error:'品牌不存在'},404);if(e instanceof Error&&e.message==='字段为空或超过长度限制')return json({error:e.message},400);return json({error:'保存失败，请稍后重试。'},503);}
+ }catch(e){if(e instanceof Error&&e.message==='TENANT_FORBIDDEN')return json({error:'无权访问其他租户'},403);if(e instanceof Error&&e.message==='TENANT_NOT_FOUND')return json({error:'品牌不存在'},404);if(e instanceof Error&&e.message==='字段为空或超过长度限制')return json({error:e.message},400);return json({error:'保存失败，请稍后重试。'},503);}
 }
