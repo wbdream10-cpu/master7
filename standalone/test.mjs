@@ -129,6 +129,17 @@ try{
  assert.equal((await get(staffCookie)).status,401);
  const demoted=session(await form('/auth/login',{username:'staffmember',password}));assert.equal((await req('/admin',{headers:{cookie:demoted}})).status,403);
  assert.equal((await (await get(demoted)).json()).tickets.length,0);
+ assert.equal((await req('/account')).status,303);
+ assert.equal((await req('/account',{headers:{cookie:ownerCookie}})).status,200);
+ assert.equal((await form('/account',{currentPassword:password,newPassword:'Changed-owner-password-8901',confirmPassword:'different'},ownerCookie)).status,400);
+ assert.equal((await form('/account',{currentPassword:'Wrong-current-password-123',newPassword:'Changed-owner-password-8901',confirmPassword:'Changed-owner-password-8901'},ownerCookie)).status,400);
+ assert.equal((await get(ownerCookie)).status,200);
+ const changed=await form('/account',{currentPassword:password,newPassword:'Changed-owner-password-8901',confirmPassword:'Changed-owner-password-8901'},ownerCookie);assert.equal(changed.status,200);assert(changed.headers.get('set-cookie').includes('Max-Age=0'));
+ const changedRecovery=(await changed.text()).match(/<code class="recovery">([^<]+)/)[1];assert(changedRecovery);assert.notEqual(changedRecovery,ownerRecovery);
+ assert.equal((await get(ownerCookie)).status,401);
+ assert.equal((await form('/auth/login',{username:'owner',password})).status,401);
+ assert.equal((await form('/auth/reset',{username:'owner',recovery:ownerRecovery,password:'Other-owner-password-1001'})).status,400);
+ const changedOwner=session(await form('/auth/login',{username:'owner',password:'Changed-owner-password-8901'}));assert.equal((await get(changedOwner)).status,200);
  sql.prepare('UPDATE portal_sessions SET expires_at=0').run();assert.equal((await get(ownerCookie)).status,401);
- console.log('PASS: real local HTTP registration/pending approval/login; owner approval; password hashing; session cookie security; unauthenticated rejection; customer/admin separation; request/reply persistence; tenant isolation; recovery rotation and session revocation; logout; suspension; expired sessions; CSP; built assets; headquarters provisioning; tenant owner isolation; employee restrictions; cross-tenant denial; role-change session revocation; Deposit request validation, exact minor units, idempotency and isolation. Temporary test database only.');
+ console.log('PASS: real local HTTP registration/pending approval/login; owner approval; password hashing; session cookie security; unauthenticated rejection; customer/admin separation; request/reply persistence; tenant isolation; recovery rotation and session revocation; logout; suspension; expired sessions; CSP; built assets; headquarters provisioning; tenant owner isolation; employee restrictions; cross-tenant denial; role-change session revocation; Deposit request validation, exact minor units, idempotency and isolation; password change, old-session invalidation and recovery rotation. Temporary test database only.');
 }finally{await new Promise(r=>server.close(r));const {sql}=await import('./runtime.mjs');sql.close();rmSync(dir,{recursive:true,force:true});}

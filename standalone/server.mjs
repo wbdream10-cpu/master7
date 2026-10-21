@@ -24,6 +24,23 @@ function accountsPage(user){const head=user.role==='owner';const users=sql.prepa
 function connectionsPage(){const rows=listConnections(),events=listEvents();return page('通用接口管理',`<main class="accounts"><div class="page-heading"><div><p class="eyebrow">OWNER / CONNECTIONS</p><h1>通用接口管理</h1><p>未配置任何外部服务。接收记录不代表业务已处理。</p></div><a class="secondary" href="/admin">返回老板后台</a></div><section class="account-row"><h2>配置接收通道</h2><form class="settings-form" method="post" action="/connections"><label>连接标识<input name="id" required pattern="[a-z0-9][a-z0-9_-]{2,39}" maxlength="40"></label><label>工作空间 ID<input name="tenantId" required value="main" maxlength="60"></label><label>签名密钥的环境变量名<input name="keyEnv" required pattern="PORTAL_HOOK_[A-Z0-9_]{3,60}" maxlength="72" placeholder="PORTAL_HOOK_..." autocomplete="off"></label><p>这里只填写环境变量名称，密钥由部署负责人在服务器设置，至少 32 字节。</p><label><input type="checkbox" name="enabled"> 启用接收</label><button class="primary">保存连接</button></form></section><section class="account-row"><h2>已配置连接</h2>${rows.length?rows.map(c=>`<div class="account-row"><b>${escape(c.id)}</b><p>${escape(c.tenantId)} · ${c.enabled?'已启用':'已停用'} · ${c.configured?'密钥已配置':'缺少密钥'}</p><code>${escape(c.callbackPath)}</code><p>密钥变量：${escape(c.keyEnv)}</p><form method="post" action="/connections"><input type="hidden" name="id" value="${escape(c.id)}"><input type="hidden" name="tenantId" value="${escape(c.tenantId)}"><input type="hidden" name="keyEnv" value="${escape(c.keyEnv)}">${c.enabled?'':'<input type="hidden" name="enabled" value="on">'}<button class="secondary">${c.enabled?'停用连接':'启用连接'}</button></form></div>`).join(''):'<p>暂无连接。</p>'}</section><section class="account-row"><h2>最近收到的事件</h2><p>仅显示事件元数据，原始内容不会在这里公开。事件仍待接手人员编写适配器处理。</p>${events.length?events.map(e=>`<div class="account-row"><b>${escape(e.type)}</b><p>${escape(e.connectionId)} · ${escape(e.tenantId)} · ${escape(e.receivedAt)}</p><code>${escape(e.eventId)}</code><p>已接收 / 未处理</p></div>`).join(''):'<p>暂无事件。</p>'}</section></main>`)}
 async function handle(req){const url=new URL(req.url,origin);const user=sessionUser(req.headers.cookie);const method=req.method||'GET';
  if(method==='POST'&&!url.pathname.startsWith('/api/v1/hooks/')&&req.headers.origin!==origin.origin)return json({error:'请求来源不受信任'},403);
+ if(url.pathname==='/account'){
+  if(!user)return redirect('/signin');
+  if(method==='GET')return page('账号安全',`<main class="auth-card"><h1>账号安全</h1><p>当前账号：${escape(user.displayName)}</p><p>修改密码将退出所有旧登录，并更换恢复码。请准备离线保存新的恢复码。</p><form method="post" action="/account"><label>当前密码<input type="password" name="currentPassword" required minlength="12" maxlength="256" autocomplete="current-password"></label><label>新密码<input type="password" name="newPassword" required minlength="12" maxlength="256" autocomplete="new-password"></label><label>确认新密码<input type="password" name="confirmPassword" required minlength="12" maxlength="256" autocomplete="new-password"></label><button class="primary full">修改密码并退出全部登录</button></form><a href="${user.role==='customer'?'/':'/admin'}">返回平台</a></main>`);
+  if(method!=='POST')return new Response('Method not allowed',{status:405});
+  if(!String(req.headers['content-type']).startsWith('application/x-www-form-urlencoded'))return json({error:'请求格式错误'},415);
+  if(limited('account-password:'+user.userId,10))return json({error:'尝试过于频繁，请稍后再试'},429);
+  const f=new URLSearchParams((await bodyOf(req)).toString()),current=f.get('currentPassword')||'',next=f.get('newPassword')||'',confirm=f.get('confirmPassword')||'';
+  if(!passwordValid(next)||next!==confirm||next===current)return json({error:'新密码至少 12 个字符，须与确认一致且不同于当前密码'},400);
+  const row=sql.prepare('SELECT password_hash FROM portal_users WHERE id=?').get(user.userId);
+  if(!row||!await verifyPassword(current,row.password_hash))return json({error:'当前密码不正确'},400);
+  const newHash=await hashPassword(next),recovery=secret();sql.exec('BEGIN IMMEDIATE');try{
+   const r=sql.prepare('UPDATE portal_users SET password_hash=?,recovery_hash=? WHERE id=? AND password_hash=?').run(newHash,digest(recovery),user.userId,row.password_hash);
+   if(!r.changes)throw Error('Concurrent password change');
+   sql.prepare('DELETE FROM portal_sessions WHERE user_id=?').run(user.userId);log(user,'修改账号密码并撤销全部登录');sql.exec('COMMIT');
+  }catch(e){sql.exec('ROLLBACK');throw e;}
+  const response=recoveryPage(recovery,true);response.headers.set('set-cookie','portal_session=; Max-Age=0'+cookieFlags);return response;
+ }
  if(url.pathname==='/api/v1/deposit-requests'){
   if(!user)return json({error:'请先登录'},401);
   if(method==='GET')return getDepositRequests(user,url.searchParams.get('tenant'));
