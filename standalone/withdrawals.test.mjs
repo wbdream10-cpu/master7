@@ -31,6 +31,7 @@ const responseBody=response=>response.json();
 const count=table=>sql.prepare('SELECT count(*) AS count FROM '+table).get().then(row=>Number(row.count));
 const submission=(requestKey,amount='1.00',extra={})=>({requestKey,amount,currency:'MYR',bankName:'Synthetic Bank',accountHolder:'SYNTHETIC MEMBER',accountNumber:'1234 5678',...extra});
 const review=(action,requestKey,extra={})=>({action,requestKey,...extra});
+const params=value=>new URLSearchParams(value);
 
 async function credit(user,amountMinor,suffix){
  const id='credit-'+suffix;
@@ -82,6 +83,40 @@ test('member request idempotency is immutable and records remain tenant-scoped',
  assert.equal((await responseBody(await enabled.list(betaBoss))).withdrawals.length,1);
  assert.equal((await enabled.review(betaBoss,null,reserved.id,review('reject','beta_review_request_01',{reason:'Wrong tenant'}))).status,404);
  assert.equal((await enabled.review(employee,null,reserved.id,review('reject','employee_review_req1',{reason:'No finance permission'}))).status,403);
+});
+
+test('finance queue is pending-first, filterable and cursor paginated without hiding old work',async()=>{
+ for(let index=0;index<101;index++){
+  const suffix=String(index).padStart(3,'0'),at=`2026-10-23T01:${String(Math.floor(index/60)).padStart(2,'0')}:${String(index%60).padStart(2,'0')}.000Z`;
+  await sql.prepare(`INSERT INTO portal_withdrawal_requests(id,tenant_id,user_id,request_key,request_fingerprint,environment,amount_minor,currency,bank_name,account_holder,account_number,status,payout_reference,paid_at,created_at,updated_at)
+   VALUES (?,?,? ,?,?, 'production',100,'MYR','Synthetic Bank','SYNTHETIC MEMBER','5555 0000','paid',?,?,?,?)`).run('beta-paid-'+suffix,'beta','bob','beta-paid-request-'+suffix,'fingerprint-'+suffix,'BETA-PAYOUT-'+suffix,at,at,at);
+ }
+ await sql.prepare(`INSERT INTO portal_withdrawal_requests(id,tenant_id,user_id,request_key,request_fingerprint,environment,amount_minor,currency,bank_name,account_holder,account_number,status,created_at,updated_at)
+  VALUES ('beta-old-pending','beta','bob','beta-old-pending-request','old-pending-fingerprint','production',250,'MYR','Synthetic Bank','SYNTHETIC MEMBER','5555 0000','pending_review','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z')`).run();
+ await sql.prepare(`INSERT INTO portal_withdrawal_requests(id,tenant_id,user_id,request_key,request_fingerprint,environment,amount_minor,currency,bank_name,account_holder,account_number,status,created_at,updated_at)
+  VALUES ('beta-processing','beta','bob','beta-processing-request','processing-fingerprint','production',300,'MYR','Synthetic Bank','SYNTHETIC MEMBER','5555 0000','processing','2026-10-23T02:00:00.000Z','2026-10-23T02:00:00.000Z')`).run();
+
+ const first=await responseBody(await enabled.list(owner,'beta',params({member:'bo'})));
+ assert.equal(first.withdrawals.length,100);assert(first.nextCursor);assert.equal(first.filters.from,null);assert.equal(first.filters.to,null);
+ assert.equal(first.summary.count,104);assert.equal(first.summary.statuses.pending_review.count,2);assert.equal(first.summary.statuses.processing.count,1);assert.equal(first.summary.statuses.paid.count,101);
+ const processingIndex=first.withdrawals.findIndex(item=>item.status==='processing');assert(processingIndex>=2);assert(first.withdrawals.slice(0,processingIndex).every(item=>item.status==='pending_review'));
+ assert(first.withdrawals.some(item=>item.id==='beta-old-pending'),'an old pending item must not be hidden by the default date range');
+ const second=await responseBody(await enabled.list(owner,'beta',params({member:'bo',cursor:first.nextCursor})));
+ assert.equal(second.summary.count,104);assert.equal(second.nextCursor,null);assert.equal(second.withdrawals.length,4);
+ assert.equal(new Set([...first.withdrawals,...second.withdrawals].map(item=>item.id)).size,104);
+
+ const paidFirst=await responseBody(await enabled.list(owner,'beta',params({status:'paid',member:'bob',from:'2026-10-23',to:'2026-10-23'})));
+ assert.equal(paidFirst.summary.count,101);assert.equal(paidFirst.withdrawals.length,100);assert(paidFirst.nextCursor);assert(paidFirst.withdrawals.every(item=>item.status==='paid'));
+ assert.equal((await enabled.list(owner,'beta',params({status:'processing',member:'bob',from:'2026-10-23',to:'2026-10-23',cursor:paidFirst.nextCursor}))).status,400,'cursor must be bound to filters');
+ for(const value of [{from:'2026-10-23'},{from:'2026-02-30',to:'2026-03-01'},{from:'2026-01-01',to:'2026-12-31'},{status:'unknown'},{member:'bob%'},{cursor:'bad!'}])assert.equal((await enabled.list(owner,'beta',params(value))).status,400,JSON.stringify(value));
+ const literalUnderscore=await responseBody(await enabled.list(owner,'beta',params({member:'_'})));assert.equal(literalUnderscore.summary.count,0,'underscore must be searched literally rather than as a LIKE wildcard');
+ const ownFiltered=await responseBody(await enabled.list(alice,null,params({member:'bob'})));assert.equal(ownFiltered.withdrawals.length,0,'member search must not widen the member scope');
+
+ const exported=await enabled.exportRecords(owner,'beta',params({status:'paid',member:'bob',from:'2026-10-23',to:'2026-10-23'}));assert.equal(exported.status,200);
+ const csv=await exported.text();assert(csv.includes('beta-paid-000'));assert(!csv.includes('beta-old-pending'));
+ assert.equal((await enabled.exportRecords(owner,'beta',params({cursor:first.nextCursor}))).status,400);
+ const audit=(await sql.prepare("SELECT action FROM audit WHERE action LIKE '导出人工提现记录：%' ORDER BY created_at DESC,id DESC LIMIT 1").get()).action;
+ assert.match(audit,/2026-10-23 至 2026-10-23 \/ paid \/ bob \/ 101 条/);
 });
 
 test('pending to processing to paid consumes one hold and posts exactly one debit',async()=>{

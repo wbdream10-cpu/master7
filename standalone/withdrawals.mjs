@@ -73,6 +73,49 @@ function normalizeReview(data){
 }
 const reviewFingerprint=value=>hash({action:value.action,reason:value.reason,reference:value.reference});
 const csvCell=value=>'"'+String(value??'').replace(/^[\u0000-\u0020]*[=+@\-]/,"'$&").replace(/"/g,'""')+'"';
+const withdrawalStatuses=new Set(['pending_review','processing','paid','rejected','failed']);
+const memberSearchPattern=/^[A-Za-z0-9_.-]{1,100}$/;
+const pageSize=100;
+const queuePriority="CASE w.status WHEN 'pending_review' THEN 0 WHEN 'processing' THEN 1 ELSE 2 END";
+const memberPriority='CASE WHEN w.id IS NULL THEN 1 ELSE 0 END';
+const exactIso=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const validDate=value=>/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value+'T00:00:00Z'))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;
+const shiftDate=(value,days)=>{const [year,month,day]=value.split('-').map(Number);return new Date(Date.UTC(year,month-1,day+days)).toISOString().slice(0,10);};
+const localDate=value=>new Date(value.getTime()+8*3600000).toISOString().slice(0,10);
+const cleanParams=params=>params instanceof URLSearchParams?params:new URLSearchParams();
+
+function queryFilters(params,instant,{allowCursor=true,defaultRange=false}={}){
+ const values=cleanParams(params),today=localDate(instant),providedFrom=values.get('from'),providedTo=values.get('to');
+ const fromLocal=providedFrom||(defaultRange?shiftDate(today,-30):null),toLocal=providedTo||(defaultRange?today:null);
+ const status=values.get('status')||'all',member=(values.get('member')||'').trim().toLowerCase(),cursor=values.get('cursor')||'';
+ if(Boolean(fromLocal)!==Boolean(toLocal)||(fromLocal&&(!validDate(fromLocal)||!validDate(toLocal)||toLocal<fromLocal||Date.parse(toLocal)-Date.parse(fromLocal)>30*86400000)))return {error:'日期无效；请同时选择开始与结束日期，最多 31 天（Asia/Kuching）'};
+ if(status!=='all'&&!withdrawalStatuses.has(status))return {error:'提现状态筛选无效'};
+ if(member&&!memberSearchPattern.test(member))return {error:'会员搜索只可使用字母、数字、点、连字号或底线'};
+ if(cursor&&(!allowCursor||cursor.length>512||!/^[A-Za-z0-9_-]+$/.test(cursor)))return {error:allowCursor?'分页标识无效':'导出不能使用分页标识'};
+ return {status,member,fromLocal,toLocal,from:fromLocal?new Date(fromLocal+'T00:00:00+08:00').toISOString():null,to:toLocal?new Date(shiftDate(toLocal,1)+'T00:00:00+08:00').toISOString():null,timeZone:'Asia/Kuching',cursor};
+}
+
+function filteredWhere(scope,reviewer,filters){
+ const clauses=['w.tenant_id=?'],values=[scope.tenantId];
+ if(filters.from){clauses.push('w.created_at>=?','w.created_at<?');values.push(filters.from,filters.to);}
+ if(!reviewer){clauses.push('w.user_id=?');values.push(scope.identity.id);}
+ if(filters.status!=='all'){clauses.push('w.status=?');values.push(filters.status);}
+ if(filters.member){clauses.push("LOWER(u.username) LIKE ? ESCAPE '!'");values.push('%'+filters.member.replaceAll('_','!_')+'%');}
+ return {sql:clauses.join(' AND '),values};
+}
+
+function cursorFor(scope,reviewer,filters,last){
+ return Buffer.from(JSON.stringify({p:reviewer?Number(last.queue_priority):0,at:last.created_at,id:last.id,s:hash({tenantId:scope.tenantId,userId:reviewer?'*':scope.identity.id,status:filters.status,member:filters.member,from:filters.fromLocal,to:filters.toLocal,sort:reviewer?'queue':'member'})})).toString('base64url');
+}
+
+function parseCursor(scope,reviewer,filters){
+ if(!filters.cursor)return null;
+ try{
+  const value=JSON.parse(Buffer.from(filters.cursor,'base64url').toString()),expected=hash({tenantId:scope.tenantId,userId:reviewer?'*':scope.identity.id,status:filters.status,member:filters.member,from:filters.fromLocal,to:filters.toLocal,sort:reviewer?'queue':'member'});
+  if(!Number.isInteger(value.p)||value.p<0||value.p>2||(!reviewer&&value.p!==0)||!exactIso.test(value.at)||!idPattern.test(value.id)||value.s!==expected)throw Error();
+  return value;
+ }catch{return false;}
+}
 
 export function createWithdrawals({env=process.env,now=()=>new Date(),rateLimit=limited}={}){
  const currentTime=()=>{const value=now();if(!(value instanceof Date)||!Number.isFinite(value.getTime()))throw new TypeError('Invalid withdrawal clock');return value;};
@@ -84,16 +127,27 @@ export function createWithdrawals({env=process.env,now=()=>new Date(),rateLimit=
   return json({tenantId:scope.tenantId,enabled:enabled(env),currency:'MYR',...wallet,postedBalanceMinor:wallet.balanceMinor,canReview:scope.manager||scope.finance});
  });}
 
- async function list(user,selected=null){return withStorage(async()=>{
+ async function list(user,selected=null,params=new URLSearchParams()){return withStorage(async()=>{
   const scope=await canonicalScope(user,selected);if(scope.error)return scope.error;
   if(!scope.customer&&!scope.manager&&!scope.finance)return json({error:'没有提现记录权限'},403);
-  const reviewer=scope.manager||scope.finance;
-  const rows=await sql.prepare(`SELECT ${projection('w.')},u.username,
+  const reviewer=scope.manager||scope.finance,filters=queryFilters(params,currentTime());
+  if(filters.error)return json({error:filters.error},400);
+  const cursor=parseCursor(scope,reviewer,filters);if(cursor===false)return json({error:'分页标识无效或与当前筛选不一致'},400);
+  const where=filteredWhere(scope,reviewer,filters),priority=reviewer?queuePriority:memberPriority,cursorSql=cursor?` AND (${priority}>? OR (${priority}=? AND (w.created_at<? OR (w.created_at=? AND w.id<?))))`:'';
+  const cursorValues=cursor?[cursor.p,cursor.p,cursor.at,cursor.at,cursor.id]:[];
+  const rows=await sql.prepare(`SELECT ${projection('w.')},u.username,${priority} AS queue_priority,
    (SELECT a.created_at FROM portal_withdrawal_actions a WHERE a.withdrawal_id=w.id AND a.action='start_processing' ORDER BY a.created_at,a.id LIMIT 1) AS processing_at,
    (SELECT a.created_at FROM portal_withdrawal_actions a WHERE a.withdrawal_id=w.id AND a.action IN ('mark_paid','reject','fail') ORDER BY a.created_at DESC,a.id DESC LIMIT 1) AS completed_at
    FROM portal_withdrawal_requests w JOIN portal_users u ON u.id=w.user_id
-   WHERE w.tenant_id=?${reviewer?'':' AND w.user_id=?'} ORDER BY w.created_at DESC,w.id DESC LIMIT 100`).all(...(reviewer?[scope.tenantId]:[scope.tenantId,scope.identity.id]));
-  return json({tenantId:scope.tenantId,enabled:enabled(env),canReview:reviewer,withdrawals:rows.map(publicWithdrawal)});
+   WHERE ${where.sql}${cursorSql} ORDER BY ${priority} ASC,w.created_at DESC,w.id DESC LIMIT ${pageSize+1}`).all(...where.values,...cursorValues);
+  const totals=await sql.prepare(`SELECT w.status,count(*) AS count,CAST(COALESCE(SUM(w.amount_minor),0) AS TEXT) AS amount
+   FROM portal_withdrawal_requests w JOIN portal_users u ON u.id=w.user_id WHERE ${where.sql} GROUP BY w.status`).all(...where.values);
+  const statuses=Object.fromEntries([...withdrawalStatuses].map(status=>[status,{count:0,amountMinor:'0'}]));
+  for(const row of totals)statuses[row.status]={count:Number(row.count),amountMinor:String(row.amount)};
+  const totalCount=totals.reduce((sum,row)=>sum+Number(row.count),0),totalMinor=totals.reduce((sum,row)=>sum+BigInt(row.amount),0n).toString();
+  const page=rows.slice(0,pageSize),last=page.at(-1);
+  return json({tenantId:scope.tenantId,enabled:enabled(env),canReview:reviewer,withdrawals:page.map(publicWithdrawal),nextCursor:rows.length>pageSize?cursorFor(scope,reviewer,filters,last):null,
+   filters:{status:filters.status,member:filters.member,from:filters.fromLocal,to:filters.toLocal,timeZone:filters.timeZone},summary:{count:totalCount,amountMinor:totalMinor,statuses}});
  });}
 
  async function submit(user,selected,data){return withStorage(async()=>{
@@ -200,17 +254,19 @@ export function createWithdrawals({env=process.env,now=()=>new Date(),rateLimit=
   return json({withdrawal:publicWithdrawal(updated),duplicate:false});
  });}
 
- async function exportRecords(user,selected=null){return withStorage(async()=>{
+ async function exportRecords(user,selected=null,params=new URLSearchParams()){return withStorage(async()=>{
   const scope=await canonicalScope(user,selected);if(scope.error)return scope.error;
   if(!scope.manager&&!scope.finance)return json({error:'只有获授权财务人员或管理员可以导出'},403);
+  const filters=queryFilters(params,currentTime(),{allowCursor:false,defaultRange:true});if(filters.error)return json({error:filters.error},400);
+  const where=filteredWhere(scope,true,filters);
   const rows=await sql.prepare(`SELECT ${projection('w.')},u.username,
    (SELECT a.created_at FROM portal_withdrawal_actions a WHERE a.withdrawal_id=w.id AND a.action='start_processing' ORDER BY a.created_at,a.id LIMIT 1) AS processing_at,
    (SELECT a.created_at FROM portal_withdrawal_actions a WHERE a.withdrawal_id=w.id AND a.action IN ('mark_paid','reject','fail') ORDER BY a.created_at DESC,a.id DESC LIMIT 1) AS completed_at
    FROM portal_withdrawal_requests w JOIN portal_users u ON u.id=w.user_id
-   WHERE w.tenant_id=? ORDER BY w.created_at DESC,w.id DESC LIMIT 10001`).all(scope.tenantId);
-  if(rows.length>10000)return json({error:'记录超过 10000 条，请联系开发人员增加日期筛选'},413);
+   WHERE ${where.sql} ORDER BY ${queuePriority} ASC,w.created_at DESC,w.id DESC LIMIT 10001`).all(...where.values);
+  if(rows.length>10000)return json({error:'记录超过 10000 条，请缩短日期范围或增加筛选'},413);
   const at=currentTime().toISOString();
-  await sql.prepare('INSERT INTO audit(id,tenant_id,actor,action,created_at) VALUES (?,?,?,?,?)').run(randomUUID(),scope.tenantId,scope.identity.email,'导出人工提现记录：'+rows.length+' 条',at);
+  await sql.prepare('INSERT INTO audit(id,tenant_id,actor,action,created_at) VALUES (?,?,?,?,?)').run(randomUUID(),scope.tenantId,scope.identity.email,'导出人工提现记录：'+filters.fromLocal+' 至 '+filters.toLocal+' / '+filters.status+' / '+(filters.member||'全部会员')+' / '+rows.length+' 条',at);
   const headers=['提现编号','会员','金额（分）','币种','银行','户口名字','户口号码','状态','银行参考号','处理原因','提交时间（UTC）','开始处理时间（UTC）','完成时间（UTC）'];
   const lines=rows.map(publicWithdrawal).map(item=>[item.id,item.member,item.amountMinor,item.currency,item.bank.bankName,item.bank.accountHolder,item.bank.accountNumber,item.status,item.reference,item.reason,item.createdAt,item.processingAt,item.completedAt].map(csvCell).join(','));
   return new Response('\ufeff'+[headers.map(csvCell).join(','),...lines].join('\r\n'),{headers:{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="master7-withdrawals.csv"','Cache-Control':'no-store'}});
