@@ -30,6 +30,8 @@ npm run test:owner-bootstrap
 
 正式启动必须安全配置 `PORTAL_POSTGRES_URL`。它是服务器秘密，不能发到聊天、提交 GitHub 或放入前端。服务端强制 TLS 证书校验；需要专用 CA 时另设置 `PORTAL_POSTGRES_CA_FILE`。Render 缺少数据库 URL 时直接拒绝启动，防止误用临时 SQLite。完整步骤、权限和验证限制见 [PostgreSQL 云端说明](docs/POSTGRES.md)。
 
+如同一部署要接受多个 HTTPS 自定义域名，可在域名 DNS、托管绑定和 TLS 证书都已准备并验收后，在服务环境中配置 `PORTAL_ALLOWED_ORIGINS`，值为逗号分隔的纯 origin，例如 `https://master7.vip,https://master7.best`。服务会将这些精确来源加入 POST 请求的来源校验；不接受路径、凭据或非 HTTPS 外部来源。`PUBLIC_ORIGIN` 仍是主来源，且允许列表必须使用相同协议。此设置只放行来源校验，不会绑定域名、配置证书、改 DNS 或解除 Cloudflare 冻结；未准备好前不要设置正式域名。
+
 首次老板开户仍在受信任环境中使用安全输入；创建账号和启动必须使用同一数据库环境配置。示例为 Bash，不能把占位邮箱当成真实账号：
 
 ```sh
