@@ -1,5 +1,5 @@
 import {createServer} from 'node:http';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,timingSafeEqual} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -19,6 +19,23 @@ const escape=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 function page(title,body,status=200){return new Response(`<!doctype html><html lang="zh-Hans"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · MASTER7</title><link rel="stylesheet" href="/assets/portal.css"><style>.auth-card{max-width:470px;margin:7vh auto;background:white;border:1px solid #e2eaf6;border-radius:16px;padding:32px}.auth-card h1{font-size:28px}.auth-card form{margin:22px 0}.auth-card label{display:block;font-size:12px;margin:15px 0;color:#62738b}.auth-card input{width:100%;padding:12px;margin-top:8px;border:1px solid #dfe7f2;border-radius:7px;font:inherit}.auth-card p{color:#73839b;font-size:12px;line-height:1.8;margin:15px 0}.auth-links{display:flex;gap:18px;color:#2165e8;font-size:12px;flex-wrap:wrap}.recovery{display:block;padding:16px;background:#edf3ff;border-radius:8px;overflow-wrap:anywhere;user-select:all;font-size:14px}.accounts{max-width:1000px;margin:35px auto;padding:20px}.account-row{background:white;padding:20px;border:1px solid #e2eaf6;border-radius:9px;margin-top:14px}.account-row form{display:inline-block;margin:10px 15px 0 0}@media(max-width:550px){.auth-card{margin:24px 15px;padding:25px}}</style></head><body>${body}</body></html>`,{status,headers:{'content-type':'text/html; charset=utf-8'}})}
 function authPage(kind,message='',status=200){const register=kind==='register',reset=kind==='reset';const title=register?'创建平台账号':reset?'找回账号密码':'登录服务平台';return page(title,`<main class="auth-card"><div class="brandmark auth-brand-logo"><img src="/brand/master7-logo.jpg" alt="MASTER7 — SEVEN Premium Experience" width="128" height="128"></div><p class="eyebrow">MASTER7 · SERVICE PORTAL</p><h1>${title}</h1><p>${register?'注册后由老板核实并批准，再登录使用。':reset?'使用注册或开户时保存的恢复码重设密码。':'使用本平台账号与密码进入服务中心。'}</p>${message?'<p role="alert">'+escape(message)+'</p>':''}<form method="post" action="/auth/${register?'register':reset?'reset':'login'}"><label>账号<input name="username" required pattern="[a-zA-Z0-9_-]{3,40}" minlength="3" maxlength="40" autocomplete="username"></label>${register?'<label>联系邮箱<input name="email" required type="email" maxlength="254" autocomplete="email"></label>':''}${reset?'<label>账号恢复码<input name="recovery" required maxlength="100" autocomplete="off"></label>':''}<label>${reset?'新密码':'密码'}<input type="password" name="password" required minlength="12" maxlength="256" autocomplete="${register||reset?'new-password':'current-password'}"></label>${register||reset?'<p>密码至少 12 个字符；不要重复使用其他网站的密码。</p>':''}<button class="primary full">${title}</button></form><nav class="auth-links"><a href="/signin">登录</a><a href="/register">注册</a><a href="/reset">找回密码</a></nav></main>`,status)}
 function recoveryPage(code,reset=false){return page('保存账号恢复码',`<main class="auth-card"><h1>${reset?'密码已重设':'注册已提交'}</h1><p>请离线保存以下恢复码。它只显示这一次，持有者可以重设你的密码。不要发送给客服或其他人。</p><code class="recovery">${escape(code)}</code><p>${reset?'旧恢复码和所有旧登录会话已失效。下次请使用此新恢复码。':'账号还需老板核实并批准，恢复码不会再次显示。'}</p><a class="primary" href="/signin">返回登录</a></main>`)}
+function ownerBootstrapConfig(){
+ if(process.env.PORTAL_OWNER_BOOTSTRAP_ENABLED!=='true')return null;
+ const username=String(process.env.PORTAL_OWNER_BOOTSTRAP_USERNAME||'').trim().toLowerCase();
+ const email=String(process.env.PORTAL_OWNER_BOOTSTRAP_EMAIL||'').trim().toLowerCase();
+ const tokenHash=String(process.env.PORTAL_OWNER_BOOTSTRAP_TOKEN_SHA256||'').trim().toLowerCase();
+ const expiresAt=Date.parse(String(process.env.PORTAL_OWNER_BOOTSTRAP_EXPIRES_AT||''));
+ if(!/^[a-z0-9_-]{3,40}$/.test(username)||email.length>254||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||!/^[a-f0-9]{64}$/.test(tokenHash)||!Number.isFinite(expiresAt))return null;
+ return {username,email,tokenHash,expiresAt};
+}
+function bootstrapTokenValid(token,expected){
+ if(typeof token!=='string'||Buffer.byteLength(token)<32||Buffer.byteLength(token)>256||!/^[a-f0-9]{64}$/.test(expected))return false;
+ return timingSafeEqual(Buffer.from(digest(token),'hex'),Buffer.from(expected,'hex'));
+}
+function maskedEmail(email){const [local,domain]=email.split('@');return escape((local.slice(0,2)||'*')+'•••@'+domain)}
+function ownerSetupPage(config,message='',status=200){return page('建立总部管理员',`<main class="auth-card"><div class="brandmark auth-brand-logo"><img src="/brand/master7-logo.jpg" alt="MASTER7 — SEVEN Premium Experience" width="128" height="128"></div><p class="eyebrow">MASTER7 · SECURE OWNER SETUP</p><h1>建立总部管理员</h1><p>这是一次性安全开户页面。开户后入口会永久关闭。</p>${message?'<p role="alert">'+escape(message)+'</p>':''}<p>账号：<b>${escape(config.username)}</b><br>邮箱：<b>${maskedEmail(config.email)}</b></p><form method="post" action="/owner-setup"><label>一次性开户码<input type="password" name="bootstrapToken" required minlength="32" maxlength="256" autocomplete="off"></label><label>新密码<input type="password" name="password" required minlength="12" maxlength="256" autocomplete="new-password"></label><label>确认新密码<input type="password" name="confirmPassword" required minlength="12" maxlength="256" autocomplete="new-password"></label><p>密码至少 12 个字符；不要使用银行、邮箱或其他网站的密码。</p><button class="primary full">安全建立总部账号</button></form><nav class="auth-links"><a href="/signin">返回登录</a></nav></main>`,status)}
+function ownerSetupClosed(message='总部管理员已建立，请直接登录。',status=410){return page('总部管理员开户已关闭',`<main class="auth-card"><div class="brandmark auth-brand-logo"><img src="/brand/master7-logo.jpg" alt="MASTER7 — SEVEN Premium Experience" width="128" height="128"></div><p class="eyebrow">MASTER7 · OWNER SETUP</p><h1>一次性开户已关闭</h1><p>${escape(message)}</p><a class="primary" href="/signin">前往登录</a></main>`,status)}
+function ownerRecoveryPage(code){return page('保存总部账号恢复码',`<main class="auth-card"><h1>总部管理员已建立</h1><p>请立即离线保存以下恢复码。它只显示这一次；不要发送给客服或其他人。</p><code class="recovery">${escape(code)}</code><p>关闭此页面后恢复码不会再次显示。请使用刚才设置的密码登录后台。</p><a class="primary" href="/signin">登录总部后台</a></main>`)}
 const redirect=(path,cookie)=>new Response(null,{status:303,headers:{location:path,...(cookie?{'set-cookie':cookie}:{})}});
 const json=(data,status=200)=>Response.json(data,{status});
 const getPaymentChannels=createPaymentChannelsHandler({
@@ -58,6 +75,30 @@ async function accountsPage(user){const head=user.role==='owner';const users=(aw
 async function connectionsPage(){const rows=(await listConnections()),events=(await listEvents());return page('通用接口管理',`<main class="accounts"><div class="page-heading"><div><p class="eyebrow">OWNER / CONNECTIONS</p><h1>通用接口管理</h1><p>未配置任何外部服务。接收记录不代表业务已处理。</p></div><a class="secondary" href="/admin">返回老板后台</a></div><section class="account-row"><h2>配置接收通道</h2><form class="settings-form" method="post" action="/connections"><label>连接标识<input name="id" required pattern="[a-z0-9][a-z0-9_-]{2,39}" maxlength="40"></label><label>工作空间 ID<input name="tenantId" required value="main" maxlength="60"></label><label>签名密钥的环境变量名<input name="keyEnv" required pattern="PORTAL_HOOK_[A-Z0-9_]{3,60}" maxlength="72" placeholder="PORTAL_HOOK_..." autocomplete="off"></label><p>这里只填写环境变量名称，密钥由部署负责人在服务器设置，至少 32 字节。</p><label><input type="checkbox" name="enabled"> 启用接收</label><button class="primary">保存连接</button></form></section><section class="account-row"><h2>已配置连接</h2>${rows.length?rows.map(c=>`<div class="account-row"><b>${escape(c.id)}</b><p>${escape(c.tenantId)} · ${c.enabled?'已启用':'已停用'} · ${c.configured?'密钥已配置':'缺少密钥'}</p><code>${escape(c.callbackPath)}</code><p>密钥变量：${escape(c.keyEnv)}</p><form method="post" action="/connections"><input type="hidden" name="id" value="${escape(c.id)}"><input type="hidden" name="tenantId" value="${escape(c.tenantId)}"><input type="hidden" name="keyEnv" value="${escape(c.keyEnv)}">${c.enabled?'':'<input type="hidden" name="enabled" value="on">'}<button class="secondary">${c.enabled?'停用连接':'启用连接'}</button></form></div>`).join(''):'<p>暂无连接。</p>'}</section><section class="account-row"><h2>最近收到的事件</h2><p>仅显示事件元数据，原始内容不会在这里公开。事件仍待接手人员编写适配器处理。</p>${events.length?events.map(e=>`<div class="account-row"><b>${escape(e.type)}</b><p>${escape(e.connectionId)} · ${escape(e.tenantId)} · ${escape(e.receivedAt)}</p><code>${escape(e.eventId)}</code><p>已接收 / 未处理</p></div>`).join(''):'<p>暂无事件。</p>'}</section></main>`)}
 async function handle(req){const url=new URL(req.url,origin);const user=(await sessionUser(req.headers.cookie));const method=req.method||'GET';
  if(method==='POST'&&!url.pathname.startsWith('/api/v1/hooks/')&&req.headers.origin!==origin.origin)return json({error:'请求来源不受信任'},403);
+ if(url.pathname==='/owner-setup'){
+  if(!['GET','POST'].includes(method))return new Response('Method not allowed',{status:405});
+  const config=ownerBootstrapConfig();
+  if(!config)return new Response('Not found',{status:404});
+  if((await sql.prepare("SELECT id FROM portal_users WHERE role='owner'").get()))return ownerSetupClosed();
+  if(config.expiresAt<=Date.now())return ownerSetupClosed('一次性开户期限已结束，请由部署负责人重新签发。');
+  if(method==='GET')return ownerSetupPage(config);
+  if(!String(req.headers['content-type']).startsWith('application/x-www-form-urlencoded'))return json({error:'请求格式错误'},415);
+  const ip=req.socket.remoteAddress||'unknown';if(await limited('owner-bootstrap-ip:'+ip,10))return ownerSetupPage(config,'尝试次数过多，请 15 分钟后再试。',429);
+  const form=new URLSearchParams((await bodyOf(req)).toString()),token=form.get('bootstrapToken')||'',password=form.get('password')||'',confirm=form.get('confirmPassword')||'';
+  if(!bootstrapTokenValid(token,config.tokenHash)||!passwordValid(password)||password!==confirm)return ownerSetupPage(config,'开户资料或一次性代码无效。',400);
+  const recovery=secret(),passwordHash=await hashPassword(password),createdAt=new Date().toISOString();
+  await sql.exec('BEGIN IMMEDIATE');try{
+   if((await sql.prepare("SELECT id FROM portal_users WHERE role='owner'").get())){await sql.exec('ROLLBACK');return ownerSetupClosed()}
+   await sql.prepare('INSERT INTO portal_users VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(),config.username,config.email,passwordHash,'owner',1,digest(recovery),createdAt);
+   await sql.prepare('INSERT INTO audit(id,tenant_id,actor,action,created_at) VALUES (?,?,?,?,?)').run(randomUUID(),'main',config.email,'安全建立首位总部管理员',createdAt);
+   await sql.exec('COMMIT');
+  }catch(e){
+   await sql.exec('ROLLBACK');
+   if((await sql.prepare("SELECT id FROM portal_users WHERE role='owner'").get()))return ownerSetupClosed();
+   throw e;
+  }
+  return ownerRecoveryPage(recovery);
+ }
  if(url.pathname==='/payment-return'){
   if(method!=='GET')return json({error:'Method not allowed'},405);
   if(!user)return redirect('/signin');
@@ -132,6 +173,7 @@ async function handle(req){const url=new URL(req.url,origin);const user=(await s
   if(!/^[a-z0-9_-]{3,40}$/.test(username))return authPage(action==='login'?'signin':action,'账号格式无效。',400);
   if(action==='register'){
    const email=(form.get('email')||'').trim().toLowerCase();if(!passwordValid(password)||email.length>254||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return authPage('register','请检查邮箱；密码至少 12 个字符，最多 256 字节。',400);
+   const bootstrap=ownerBootstrapConfig();if(bootstrap&&(username===bootstrap.username||email===bootstrap.email))return authPage('register','账号或邮箱不可用，请使用其他资料。',409);
    const recovery=secret(),hash=await hashPassword(password);try{(await sql.prepare('INSERT INTO portal_users VALUES (?,?,?,?,?,?,?,?)').run(randomUUID(),username,email,hash,'customer',0,digest(recovery),new Date().toISOString()))}catch{return authPage('register','账号或邮箱不可用，请使用其他资料。',409)}return recoveryPage(recovery);
   }
   const row=(await sql.prepare('SELECT * FROM portal_users WHERE username=?').get(username));
