@@ -14,6 +14,7 @@
     "test:migrations": "node standalone/brand-migration.test.mjs",
     "test:storage": "node standalone/storage-config.test.mjs",
     "test:payments": "node standalone/payment-channels.test.mjs && node standalone/vpay-contract.test.mjs && node standalone/gspay-contract.test.mjs && node standalone/gspay-runtime.test.mjs && node standalone/gspay-runtime-http.test.mjs && node standalone/gspay-provider.test.mjs && node standalone/gspay-checkout-core.test.mjs && node standalone/gspay-schema.test.mjs && node standalone/gspay-schema.test.mjs --postgres && node standalone/gspay-store.test.mjs && node standalone/gspay-store.test.mjs --postgres",
+    "test:vpay-runtime": "node standalone/vpay-store.test.mjs && node standalone/vpay-store.test.mjs --postgres && node standalone/vpay-recovery.test.mjs && node standalone/vpay-recovery.test.mjs --postgres",
     "test:wallet": "node standalone/wallet.test.mjs && node standalone/wallet.test.mjs --postgres",
     "test:wallet:http": "node standalone/wallet-http.test.mjs",
     "test:checkout": "node standalone/vpay-checkout.test.mjs && node standalone/vpay-checkout.test.mjs --postgres",
@@ -22,7 +23,8 @@
     "test:withdrawals": "node standalone/withdrawals.test.mjs && node standalone/withdrawals.test.mjs --postgres && node standalone/withdrawals-http.test.mjs",
     "test:finance-reconciliation": "node standalone/finance-reconciliation.test.mjs && node standalone/finance-reconciliation.test.mjs --postgres && node standalone/finance-reconciliation-http.test.mjs",
     "test:origins": "node standalone/server-origin-config.test.mjs",
-    "test:owner-bootstrap": "node standalone/owner-bootstrap.test.mjs && node standalone/owner-bootstrap.test.mjs --postgres"
+    "test:owner-bootstrap": "node standalone/owner-bootstrap.test.mjs && node standalone/owner-bootstrap.test.mjs --postgres",
+    "test:member-identity": "node standalone/member-identity-http.test.mjs && node standalone/member-identity-http.test.mjs --postgres"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

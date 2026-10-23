@@ -1,6 +1,6 @@
 import { getChatGPTUser } from '../../chatgpt-auth';
 import { getDb } from '../../../db';
-import { notices,tickets,audit,brands,members } from '../../../db/schema';
+import { notices,tickets,audit,brands,members,portalUsers,portalSessions,portalStaff } from '../../../db/schema';
 import { eq,desc,and,gte,count } from 'drizzle-orm';
 import { isOwner } from '../../../lib/access';
 export const dynamic='force-dynamic';
@@ -63,8 +63,26 @@ export async function POST(req:Request){
   }else if(data.action==='assign-member'){
    const email=field(data.email,254).toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return json({error:'邮箱格式无效'},400);
    const [existing]=await db.select().from(members).where(eq(members.email,email));
-   if(existing&&existing.tenantId!==tenantId)return json({error:'该账号已归属其他品牌，请先核对归属'},409);
-   await db.batch([db.insert(members).values({email,tenantId,createdAt:now}).onConflictDoNothing(),db.insert(audit).values({id:crypto.randomUUID(),tenantId,actor:user.email,action:'分配品牌成员：'+email,createdAt:now})]);
+   if(existing&&existing.tenantId!==tenantId){
+    // Approval binds an unassigned account to main. Headquarters may move
+    // that ordinary customer once to an explicit brand; later cross-brand
+    // transfers still require a separate reviewed migration.
+    if(existing.tenantId!=='main'||tenantId==='main')return json({error:'该账号已归属其他品牌，请先核对归属'},409);
+    const [account]=await db.select({id:portalUsers.id,role:portalUsers.role}).from(portalUsers).where(eq(portalUsers.email,email));
+    const [staff]=account?await db.select({userId:portalStaff.userId}).from(portalStaff).where(eq(portalStaff.userId,account.id)):[];
+    if(!account||account.role!=='customer'||staff)return json({error:'只有普通会员可以从主空间分配到品牌'},409);
+    await db.batch([
+     // This no-op identity write serializes the membership move with wallet
+     // settlement and staff promotion, which lock the same account row.
+     db.update(portalUsers).set({id:account.id}).where(and(eq(portalUsers.id,account.id),eq(portalUsers.role,'customer'))),
+     db.update(members).set({tenantId}).where(and(eq(members.email,email),eq(members.tenantId,'main'))),
+     db.delete(portalSessions).where(eq(portalSessions.userId,account.id)),
+     db.insert(audit).values({id:crypto.randomUUID(),tenantId,actor:user.email,action:'从主空间分配品牌成员：'+email,createdAt:now}),
+    ]);
+    const [assigned]=await db.select().from(members).where(eq(members.email,email));
+    const [assignedStaff]=await db.select({userId:portalStaff.userId}).from(portalStaff).where(eq(portalStaff.userId,account.id));
+    if(!assigned||assigned.tenantId!==tenantId||assignedStaff)return json({error:'账号归属已变化，请重新核对'},409);
+   }else await db.batch([db.insert(members).values({email,tenantId,createdAt:now}).onConflictDoNothing(),db.insert(audit).values({id:crypto.randomUUID(),tenantId,actor:user.email,action:'分配品牌成员：'+email,createdAt:now})]);
   }else if(data.action==='save-notice'){
    const title=field(data.title,120),body=field(data.body,6000),published=data.published===true;
    await db.batch([db.insert(notices).values({id,tenantId,title,body,published,createdAt:now}),db.insert(audit).values({id:crypto.randomUUID(),tenantId,actor:user.email,action:published?'发布公告：'+title:'保存公告草稿：'+title,createdAt:now})]);

@@ -2,12 +2,14 @@ import {randomUUID,createHash,timingSafeEqual} from 'node:crypto';
 import {sql,withStorage} from './runtime.mjs';
 import {normalizeVPayMYR,inspectVPayCreateResult,inspectVPayNotification,inspectVPayQueryResult,VPayContractError} from './vpay-contract.mjs';
 import {createVPayOrderVerifier} from './vpay-gateway.mjs';
+import {createVPayStore} from './vpay-store.mjs';
 import {withdrawalWalletState} from './withdrawals.mjs';
 
 const json=(value,status=200)=>Response.json(value,{status});
 const identifier=v=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,50}$/.test(v);
 const merchant=v=>typeof v==='string'&&/^[1-9]\d{0,9}$/.test(v);
-const expected=order=>({traderId:order.merchant_id,outTradeNo:order.id,tradeNo:order.trade_no,amount:(BigInt(order.amount_minor)/100n).toString()+'.'+(BigInt(order.amount_minor)%100n).toString().padStart(2,'0'),currency:order.currency});
+const decimal=minor=>(BigInt(minor)/100n).toString()+'.'+(BigInt(minor)%100n).toString().padStart(2,'0');
+const expected=order=>({traderId:order.merchantId,outTradeNo:order.id,tradeNo:order.tradeNo,amount:decimal(order.amountMinor),currency:order.currency});
 const equalToken=(authorization,token)=>{
  if(typeof token!=='string'||Buffer.byteLength(token)<32||Buffer.byteLength(token)>1024||typeof authorization!=='string'||authorization.length>1100)return false;
  const a=Buffer.from(authorization),b=Buffer.from('Bearer '+token);
@@ -18,9 +20,15 @@ const success=()=>new Response('SUCCESS',{headers:{'Content-Type':'text/plain; c
 export function createVPaySettlement({env=process.env,verifyOrder,now=()=>new Date()}={}){
  const trader=String(env.PORTAL_VPAY_TRADER_ID||''),environment=String(env.PORTAL_VPAY_ENVIRONMENT||'');
  const token=env.PORTAL_VPAY_CALLBACK_TOKEN;
- const enabled=env.PORTAL_VPAY_SETTLEMENT_ENABLED==='true'&&merchant(trader)&&['uat','production'].includes(environment)&&typeof token==='string'&&Buffer.byteLength(token)>=32&&Buffer.byteLength(token)<=1024;
+ const validToken=value=>typeof value==='string'&&Buffer.byteLength(value)>=32&&Buffer.byteLength(value)<=1024;
+ const queryToken=env.PORTAL_VPAY_QUERY_TOKEN,orderToken=env.PORTAL_VPAY_ORDER_TOKEN;
+ const injectedVerifier=typeof verifyOrder==='function';
+ const credentialsReady=injectedVerifier||(validToken(queryToken)&&queryToken!==token&&
+  (!Object.hasOwn(env,'PORTAL_VPAY_ORDER_TOKEN')||(validToken(orderToken)&&orderToken!==token&&orderToken!==queryToken)));
+ const enabled=env.PORTAL_VPAY_SETTLEMENT_ENABLED==='true'&&merchant(trader)&&['uat','production'].includes(environment)&&validToken(token)&&credentialsReady;
  const verify=verifyOrder||createVPayOrderVerifier({token:env.PORTAL_VPAY_QUERY_TOKEN,environment});
-const find=id=>withStorage(()=>sql.prepare("SELECT * FROM portal_payment_orders WHERE id=? AND provider='vpay' AND merchant_id=? AND environment=?").get(id,trader,environment));
+ const durable=merchant(trader)&&['uat','production'].includes(environment)?createVPayStore({merchantId:trader,environment,now}):null;
+ const find=id=>durable?.store.findById(id);
  async function review(order,reason,evidence,{hold=true}={}){
   // VPay sign can contain a reversible encoding of credentials: never persist it.
   let observedMinor=null;try{observedMinor=normalizeVPayMYR(evidence?.amount).amountMinor;}catch{}
@@ -28,7 +36,7 @@ const find=id=>withStorage(()=>sql.prepare("SELECT * FROM portal_payment_orders 
   const hash=createHash('sha256').update(JSON.stringify(observed)).digest('hex'),at=now().toISOString();
   await withStorage(async()=>{
    await sql.exec('BEGIN IMMEDIATE');try{
-    await sql.prepare('INSERT INTO portal_payment_reviews(id,order_id,tenant_id,reason,evidence_hash,created_at,observed_minor,observed_currency,observed_state,observed_trade_no) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(order_id,reason,evidence_hash) DO NOTHING').run(randomUUID(),order.id,order.tenant_id,reason,hash,at,observed.amountMinor,observed.currency,observed.state,observed.tradeNo);
+    await sql.prepare('INSERT INTO portal_payment_reviews(id,order_id,tenant_id,reason,evidence_hash,created_at,observed_minor,observed_currency,observed_state,observed_trade_no) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(order_id,reason,evidence_hash) DO NOTHING').run(randomUUID(),order.id,order.tenantId,reason,hash,at,observed.amountMinor,observed.currency,observed.state,observed.tradeNo);
     if(hold)await sql.prepare("UPDATE portal_payment_orders SET review_required=1 WHERE id=? AND provider='vpay'").run(order.id);
     await sql.exec('COMMIT');
    }catch(e){await sql.exec('ROLLBACK');throw e;}
@@ -37,34 +45,62 @@ const find=id=>withStorage(()=>sql.prepare("SELECT * FROM portal_payment_orders 
  async function hasCredit(order){
   return withStorage(async()=>{
    const entry=await sql.prepare('SELECT * FROM portal_wallet_journal WHERE order_id=?').get(order.id);
-   return Boolean(entry&&entry.user_id===order.user_id&&entry.tenant_id===order.tenant_id&&entry.environment===order.environment&&entry.currency===order.currency&&BigInt(entry.member_minor)===BigInt(order.amount_minor)&&BigInt(entry.clearing_minor)===-BigInt(order.amount_minor));
+   return Boolean(entry&&entry.user_id===order.userId&&entry.tenant_id===order.tenantId&&entry.environment===order.environment&&entry.currency===order.currency&&BigInt(entry.member_minor)===BigInt(order.amountMinor)&&BigInt(entry.clearing_minor)===-BigInt(order.amountMinor));
   });
  }
- // Private server operations: no browser route may bind supplier order numbers.
- async function reserveForMember(user,{amount,currency,requestKey}){
+ async function reserveForMember(user,{amount,currency,requestKey,fingerprint,tradeCode}){
   if(!enabled)throw Error('VPAY_SETTLEMENT_DISABLED');
   const normalized=normalizeVPayMYR(amount);
-  if(currency!=='MYR'||BigInt(normalized.amountMinor)>10000000n||typeof requestKey!=='string'||!/^[A-Za-z0-9_-]{16,100}$/.test(requestKey))throw Error('VPAY_INVALID_ORDER');
-  return withStorage(async()=>{
-   const member=await sql.prepare("SELECT u.id,COALESCE(m.tenant_id,'main') AS tenant_id FROM portal_users u LEFT JOIN members m ON m.email=u.email LEFT JOIN portal_staff p ON p.user_id=u.id WHERE u.id=? AND u.role='customer' AND u.approved=1 AND p.user_id IS NULL").get(user?.userId||'');
-   if(!member||user.role!=='customer'||(user.tenantId&&user.tenantId!==member.tenant_id))throw Error('VPAY_MEMBER_UNAVAILABLE');
-   const id=randomUUID(),at=now().toISOString();
-   await sql.prepare("INSERT INTO portal_payment_orders(id,tenant_id,user_id,request_key,merchant_id,environment,amount_minor,currency,settlement_status,created_at,provider) VALUES (?,?,?,?,?,?,?,?,'created',?,'vpay') ON CONFLICT(user_id,request_key) DO NOTHING").run(id,member.tenant_id,member.id,requestKey,trader,environment,Number(normalized.amountMinor),'MYR',at);
-   const order=await sql.prepare('SELECT * FROM portal_payment_orders WHERE user_id=? AND request_key=?').get(member.id,requestKey);
-  if(order.tenant_id!==member.tenant_id||order.provider!=='vpay'||order.merchant_id!==trader||order.environment!==environment||BigInt(order.amount_minor)!==BigInt(normalized.amountMinor))throw Error('VPAY_IDEMPOTENCY_CONFLICT');
-   return order;
-  });
+  if(currency!=='MYR'||BigInt(normalized.amountMinor)>10000000n)throw Error('VPAY_INVALID_ORDER');
+  const member=await durable.resolveMember(user);
+  const result=await durable.store.reserve({id:randomUUID(),userId:member.userId,tenantId:member.tenantId,
+   requestKey,amountMinor:normalized.amountMinor,currency:'MYR',fingerprint,tradeCode,createdAt:now().toISOString()});
+  return result.order;
  }
- async function bindCreatedOrder(id,providerReceipt){
+ async function claimCreate(id,{fingerprint,attemptedAt}){
+  if(!enabled)throw Error('VPAY_SETTLEMENT_DISABLED');
+  return durable.store.claimCreate(id,{fingerprint,attemptedAt});
+ }
+ async function bindCreatedOrder(id,providerReceipt,{updatedAt=now().toISOString()}={}){
   if(!enabled)throw Error('VPAY_SETTLEMENT_DISABLED');
   const order=await find(id);if(!order)throw Error('VPAY_ORDER_UNKNOWN');
   const result=inspectVPayCreateResult(providerReceipt,expected(order));
-  return withStorage(async()=>{
-   const changed=await sql.prepare("UPDATE portal_payment_orders SET trade_no=?,settlement_status='pending' WHERE id=? AND provider='vpay' AND settlement_status='created' AND review_required=0").run(result.tradeNo,id);
-   const current=await find(id);
-   if(!changed.changes&&current?.trade_no!==result.tradeNo)throw Error('VPAY_ORDER_BINDING_CONFLICT');
-   return current;
-  });
+  return durable.store.markCreated(id,{tradeNo:result.tradeNo,checkoutUrl:result.payUrl,expiresAtRaw:result.expiresAtRaw,updatedAt});
+ }
+ async function processQuery(order){
+  const claim=await durable.store.claimQuery(order.id,{attemptedAt:now().toISOString()});
+  if(!claim.claimed){
+   if(claim.order?.settlementStatus==='credited')return await hasCredit(claim.order)?'credited':'ledger_inconsistent';
+   return 'busy';
+  }
+  const claimed=claim.order,attemptId=claimed.queryAttemptId,claimToken=claimed.queryClaimToken;
+  let confirmed,receipt;
+  try{
+   receipt=await verify({id:claimed.id,trade_no:claimed.tradeNo,merchant_id:claimed.merchantId});
+   confirmed=inspectVPayQueryResult(receipt,expected(claimed));
+  }catch(error){
+   const mismatch=error instanceof VPayContractError&&['VPAY_MERCHANT_MISMATCH','VPAY_ORDER_MISMATCH','VPAY_AMOUNT_MISMATCH','VPAY_CURRENCY_MISMATCH'].includes(error.code);
+   try{await durable.store.finishQuery(claimed.id,{attemptId,claimToken,queryState:'unknown',reason:mismatch?error.code:'VPAY_VERIFICATION_PENDING',updatedAt:now().toISOString()});}catch{}
+   if(mismatch)await review(claimed,error.code,receipt?.data);
+   return mismatch?'review':'pending';
+  }
+  if(confirmed.providerState==='paid'){
+   try{
+    const result=await durable.settlement.commitConfirmed({orderId:claimed.id,attemptId,claimToken,
+     confirmation:{provider:'vpay',source:'gateway_query',gatewayAuthenticated:true,providerState:'paid',currency:'MYR',tradeNo:confirmed.tradeNo,amountMinor:confirmed.amountMinor},
+     committedAt:now().toISOString()});
+    return result.credited||result.alreadyCredited?'credited':result.reviewRequired?'review':'pending';
+   }catch(error){
+    if(error?.message==='VPAY_QUERY_LEASE_LOST')return 'busy';
+    try{await durable.store.finishQuery(claimed.id,{attemptId,claimToken,queryState:'unknown',reason:'VPAY_SETTLEMENT_RETRY',updatedAt:now().toISOString()});}catch{}
+    await review(claimed,'VPAY_SETTLEMENT_RETRY',{}, {hold:false});
+    return 'pending';
+   }
+  }
+  const queryState=['failed','reversed'].includes(confirmed.providerState)?confirmed.providerState:confirmed.providerState==='pending'?'pending':'unknown';
+  try{await durable.store.finishQuery(claimed.id,{attemptId,claimToken,queryState,reason:queryState==='pending'?'VPAY_QUERY_PENDING':'VPAY_QUERY_NOT_PAID',tradeNo:confirmed.tradeNo,amountMinor:confirmed.amountMinor,updatedAt:now().toISOString()});}catch(error){if(error?.message==='VPAY_QUERY_LEASE_LOST')return 'busy';throw error;}
+  if(['reversed','unknown'].includes(queryState))await review(claimed,'VPAY_QUERY_NOT_PAID',{amount:confirmed.amount,currency:'MYR',state:confirmed.providerStateCode,trade_no:confirmed.tradeNo});
+  return queryState==='pending'?'pending':'review';
  }
  async function receive(raw,authorization){
   if(!enabled)return json({error:'VPAY_SETTLEMENT_DISABLED'},503);
@@ -74,11 +110,11 @@ const find=id=>withStorage(()=>sql.prepare("SELECT * FROM portal_payment_orders 
   if(!payload||Array.isArray(payload)||typeof payload!=='object'||!identifier(payload.out_trade_no)||payload.trader_id!==trader)return json({error:'VPAY_INVALID_CALLBACK'},400);
   let order=await find(payload.out_trade_no);
   if(!order)return json({error:'VPAY_ORDER_UNKNOWN'},409);
-  if(!order.trade_no){
-   if(!['in_flight','unknown'].includes(order.create_outcome)||typeof payload.trade_no!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(payload.trade_no))return json({error:'VPAY_ORDER_AWAITING_CONFIRMATION'},503);
+  if(!order.tradeNo){
+   if(!['in_flight','unknown'].includes(order.createState)||typeof payload.trade_no!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(payload.trade_no))return json({error:'VPAY_ORDER_AWAITING_CONFIRMATION'},503);
    // Provisional reference: the authenticated query must match the reserved
    // order and exact amount before it can be bound or credited.
-   order={...order,trade_no:payload.trade_no};
+   order={...order,tradeNo:payload.trade_no};
   }
   let notification;
   try{notification=inspectVPayNotification(payload,expected(order));}catch(e){
@@ -86,46 +122,41 @@ const find=id=>withStorage(()=>sql.prepare("SELECT * FROM portal_payment_orders 
    await review(order,e.code,payload);
    return json({error:'VPAY_RECONCILIATION_REQUIRED'},409);
   }
-  if(notification.providerState!=='paid'){
-   await review(order,'VPAY_NONPAID_NOTIFICATION',payload,{hold:['reversed','risk_control','unknown'].includes(notification.providerState)});
-   return json({error:'VPAY_PAYMENT_NOT_CONFIRMED'},503);
-  }
-  if(order.review_required)return json({error:'VPAY_RECONCILIATION_REQUIRED'},503);
-  if(order.settlement_status==='credited')return await hasCredit(order)?success():json({error:'VPAY_LEDGER_INCONSISTENT'},503);
-  let confirmed,receipt;
-  try{receipt=await verify(order);confirmed=inspectVPayQueryResult(receipt,expected(order));}catch(e){
-   const mismatch=e instanceof VPayContractError&&['VPAY_MERCHANT_MISMATCH','VPAY_ORDER_MISMATCH','VPAY_AMOUNT_MISMATCH','VPAY_CURRENCY_MISMATCH'].includes(e.code);
-   await review(order,mismatch?e.code:'VPAY_VERIFICATION_PENDING',receipt?.data,{hold:mismatch});
-   return json({error:'VPAY_VERIFICATION_PENDING'},503);
-  }
-  if(confirmed.providerState!=='paid'){
-   await review(order,'VPAY_QUERY_NOT_PAID',receipt?.data,{hold:['reversed','unknown'].includes(confirmed.providerState)});
-   return json({error:'VPAY_PAYMENT_NOT_CONFIRMED'},503);
-  }
-  return withStorage(async()=>{
-   const at=now().toISOString();await sql.exec('BEGIN IMMEDIATE');
-   try{
-    const member=await sql.prepare("SELECT COALESCE(m.tenant_id,'main') AS tenant_id FROM portal_users u LEFT JOIN members m ON m.email=u.email LEFT JOIN portal_staff p ON p.user_id=u.id WHERE u.id=? AND u.role='customer' AND u.approved=1 AND p.user_id IS NULL").get(order.user_id);
-    if(!member||member.tenant_id!==order.tenant_id){
-     await sql.exec('ROLLBACK');await review(order,'VPAY_MEMBERSHIP_CHANGED',{outTradeNo:order.id});
-     return json({error:'VPAY_RECONCILIATION_REQUIRED'},503);
-    }
-    // The conditional write serializes concurrent workers on this order as well.
-    const changed=await sql.prepare("UPDATE portal_payment_orders SET settlement_status='credited',trade_no=?,create_outcome='created',verified_at=?,credited_at=? WHERE id=? AND provider='vpay' AND review_required=0 AND merchant_id=? AND environment=? AND ((settlement_status='pending' AND trade_no=?) OR (settlement_status='created' AND trade_no IS NULL AND create_outcome IN ('in_flight','unknown')))").run(order.trade_no,at,at,order.id,trader,environment,order.trade_no);
-    if(!changed.changes){
-     const current=await find(order.id),done=current?.settlement_status==='credited'&&!current.review_required&&await hasCredit(current);
-     await sql.exec('ROLLBACK');return done?success():json({error:'VPAY_SETTLEMENT_CONFLICT'},503);
-    }
-    await sql.prepare('INSERT INTO portal_wallet_journal(id,order_id,tenant_id,user_id,environment,currency,member_minor,clearing_minor,created_at) VALUES (?,?,?,?,?,?,?,?,?)').run(randomUUID(),order.id,order.tenant_id,order.user_id,environment,'MYR',order.amount_minor,-order.amount_minor,at);
-    await sql.prepare('INSERT INTO audit(id,tenant_id,actor,action,created_at) VALUES (?,?,?,?,?)').run(randomUUID(),order.tenant_id,'system:vpay','VPay 充值核验并入账：'+order.id,at);
-    await sql.exec('COMMIT');return success();
-   }catch{
-    await sql.exec('ROLLBACK');await review(order,'VPAY_SETTLEMENT_RETRY',payload,{hold:false});
-    return json({error:'VPAY_SETTLEMENT_RETRY'},503);
-   }
-  });
+  const action=notification.providerState==='paid'?'independent_query_required':['reversed','risk_control','unknown'].includes(notification.providerState)?'finance_review_required':'not_payable';
+  const eventId=createHash('sha256').update(JSON.stringify({version:1,orderId:order.id,tradeNo:notification.tradeNo,amountMinor:notification.amountMinor,state:notification.providerState})).digest('hex');
+  try{await durable.store.recordCallback(order.id,{eventId,tradeNo:notification.tradeNo,reportedState:notification.providerState,action,amountMinor:notification.amountMinor,currency:'MYR',receivedAt:now().toISOString()});}
+  catch{return json({error:'VPAY_RECONCILIATION_REQUIRED'},409);}
+  if(notification.providerState!=='paid')return json({error:'VPAY_PAYMENT_NOT_CONFIRMED'},503);
+  order=await find(order.id);
+  if(order.reviewRequired)return json({error:'VPAY_RECONCILIATION_REQUIRED'},503);
+  if(order.settlementStatus==='credited')return await hasCredit(order)?success():json({error:'VPAY_LEDGER_INCONSISTENT'},503);
+  const outcome=await processQuery(order);
+  if(outcome==='credited')return success();
+  if(outcome==='ledger_inconsistent')return json({error:'VPAY_LEDGER_INCONSISTENT'},503);
+  if(outcome==='review')return json({error:'VPAY_RECONCILIATION_REQUIRED'},503);
+  return json({error:'VPAY_VERIFICATION_PENDING'},503);
  }
- return {reserveForMember,bindCreatedOrder,receive,noteCreationPending:(order,evidence)=>review(order,'VPAY_ORDER_CREATION_PENDING',evidence,{hold:false})};
+ async function recoverPending({limit=25}={}){
+  if(!enabled||env.PORTAL_VPAY_RECOVERY_ENABLED!=='true')return {enabled:false,processed:0,credited:0};
+  const candidates=await durable.store.listRecoveryCandidates({limit});let processed=0,credited=0;
+  for(const order of candidates){const outcome=await processQuery(order);processed++;if(outcome==='credited')credited++;}
+  return {enabled:true,processed,credited};
+ }
+ async function noteCreationPending(order){
+  const current=await durable.store.markCreateUnknown(order.id,{updatedAt:now().toISOString()});
+  if(current.settlementStatus!=='credited')await review(current,'VPAY_ORDER_CREATION_PENDING',{}, {hold:false});
+  return current;
+ }
+ return {reserveForMember,claimCreate,bindCreatedOrder,receive,recoverPending,noteCreationPending};
+}
+
+export function startVPayRecovery(settlement,{env=process.env,setIntervalFn=setInterval}={}){
+ if(env.PORTAL_VPAY_RECOVERY_ENABLED!=='true'||typeof settlement?.recoverPending!=='function')return {enabled:false,stop(){}};
+ const requested=Number(env.PORTAL_VPAY_RECOVERY_INTERVAL_MS||120000),interval=Number.isInteger(requested)&&requested>=60000&&requested<=3600000?requested:120000;
+ let running=false;
+ const run=async()=>{if(running)return;running=true;try{await settlement.recoverPending({limit:25});}catch{console.error('VPay recovery pass failed.');}finally{running=false;}};
+ const timer=setIntervalFn(run,interval);timer?.unref?.();queueMicrotask(run);
+ return {enabled:true,stop(){clearInterval(timer);}};
 }
 
 async function access(user,selected,{financeRecords=false}={}){
@@ -140,7 +171,8 @@ async function access(user,selected,{financeRecords=false}={}){
  const manager=['owner','tenant_owner'].includes(actualRole);
  const finance=actualRole==='employee'&&Boolean(identity.finance_user_id);
  if(actualRole==='employee'&&(!financeRecords||!finance))return {error:json({error:'无资金记录查看权限'},403)};
- const bound=actualRole==='owner'?null:identity.staff_tenant||identity.member_tenant||'main';
+ const bound=actualRole==='owner'?null:identity.staff_tenant||identity.member_tenant;
+ if(actualRole!=='owner'&&!bound)return {error:json({error:'账号尚未绑定会员租户'},403)};
  if(actualRole!=='owner'&&user.tenantId&&user.tenantId!==bound)return {error:json({error:'账号租户归属已变化，请重新登录'},403)};
  if(actualRole!=='owner'&&selected&&selected!==bound)return {error:json({error:'无权访问其他租户'},403)};
  const tenant=actualRole==='owner'?(selected||'main'):bound;

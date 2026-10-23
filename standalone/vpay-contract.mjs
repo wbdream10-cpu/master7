@@ -92,9 +92,14 @@ export function createUnsignedVPayOrder(input, configuration) {
 
 function envelope(value) {
   record(value);
-  if (!Number.isInteger(value.code)) fail('VPAY_INVALID_RESPONSE_CODE');
+  // The supplier examples and gateway responses use both JSON number 0 and
+  // the exact string "0". Accept only those two success representations;
+  // coercing any other string would make malformed codes ambiguous.
+  if (value.code !== 0 && value.code !== '0') {
+    if (!Number.isInteger(value.code)) fail('VPAY_INVALID_RESPONSE_CODE');
+    fail('VPAY_PROVIDER_REJECTED');
+  }
   // Never surface the provider's raw msg, sign, token or account fields.
-  if (value.code !== 0) fail('VPAY_PROVIDER_REJECTED');
   return record(value.data);
 }
 function match(data, expected, { merchantRequired = false, tradeNoRequired = false } = {}) {

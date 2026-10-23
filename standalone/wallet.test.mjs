@@ -31,13 +31,15 @@ const owner={userId:'owner',email:'owner@example.test',role:'owner'},boss={userI
 const callbackToken='synthetic-callback-key-never-used-in-production';
 const env={PORTAL_VPAY_SETTLEMENT_ENABLED:'true',PORTAL_VPAY_TRADER_ID:'123456',PORTAL_VPAY_ENVIRONMENT:'uat',PORTAL_VPAY_CALLBACK_TOKEN:callbackToken};
 let sequence=0;
-const fields=(order,extra={})=>({trader_id:'123456',out_trade_no:order.id,trade_no:order.trade_no,amount:'12.34',state:'3',sign:'private-signature-must-never-be-stored',acc_no:'private-account-must-never-be-stored',...extra});
+const fields=(order,extra={})=>({trader_id:'123456',out_trade_no:order.id,trade_no:order.trade_no||order.tradeNo,amount:'12.34',state:'3',sign:'private-signature-must-never-be-stored',acc_no:'private-account-must-never-be-stored',...extra});
 const query=(order,extra={})=>({code:0,data:fields(order,extra)});
 const raw=(order,extra)=>Buffer.from(JSON.stringify(fields(order,extra)));
 const auth='Bearer '+callbackToken;
 const core=options=>createVPaySettlement({env,verifyOrder:async order=>query(order),...options});
+const intent=value=>({fingerprint:'a'.repeat(64),tradeCode:'2',...value});
 async function orderFor(settlement=core(),user=alice,extra={}){
- const order=await settlement.reserveForMember(user,{amount:'12.34',currency:'MYR',requestKey:'synthetic_request_'+(++sequence),...extra});
+ const order=await settlement.reserveForMember(user,intent({amount:'12.34',currency:'MYR',requestKey:'synthetic_request_'+(++sequence),...extra}));
+ await settlement.claimCreate(order.id,{fingerprint:order.fingerprint,attemptedAt:new Date().toISOString()});
  return settlement.bindCreatedOrder(order.id,{code:0,data:fields({...order,trade_no:'provider_'+sequence},{pay_url:'https://payment.vpay.club/pay/synthetic-order',expired_time:'2026-10-23 23:59:59'})});
 }
 const count=table=>withStorage(()=>sql.prepare('SELECT count(*) AS n FROM '+table).get()).then(r=>Number(r.n));
@@ -47,6 +49,8 @@ const balance=user=>withStorage(()=>getWallet(user,user.tenantId,'uat')).then(r=
 
 test('callbacks are disabled by default and reject missing, wrong, oversized and malformed authentication',async()=>{
  assert.equal((await createVPaySettlement({env:{}}).receive(Buffer.from('{}'),auth)).status,503);
+ const reused={...env,PORTAL_VPAY_QUERY_TOKEN:callbackToken};
+ assert.equal((await createVPaySettlement({env:reused}).receive(Buffer.from('{}'),auth)).status,503);
  const s=core();
  for(const token of [undefined,'Bearer wrong','',auth+' ','Bearer '+callbackToken.repeat(50)])assert.equal((await s.receive(Buffer.from('{}'),token)).status,401);
  assert.equal((await s.receive(Buffer.from('not-json'),auth)).status,400);
@@ -58,13 +62,13 @@ test('callbacks are disabled by default and reject missing, wrong, oversized and
 
 test('orders use database member identity and an immutable idempotency binding',async()=>{
  const s=core(),requestKey='same_synthetic_request_key';
- const a=await s.reserveForMember(alice,{amount:'12.34',currency:'MYR',requestKey});
- const b=await s.reserveForMember(alice,{amount:'12.34',currency:'MYR',requestKey});
- assert.equal(a.id,b.id);assert.equal(a.tenant_id,'alpha');assert.equal(a.user_id,'alice');
- await assert.rejects(s.reserveForMember(alice,{amount:'12.35',currency:'MYR',requestKey}),/IDEMPOTENCY_CONFLICT/);
- await assert.rejects(s.reserveForMember({...alice,tenantId:'beta'},{amount:'12.34',currency:'MYR',requestKey:'forged_tenant_request'}),/MEMBER_UNAVAILABLE/);
- await assert.rejects(s.reserveForMember(owner,{amount:'12.34',currency:'MYR',requestKey:'owner_deposit_request'}),/MEMBER_UNAVAILABLE/);
- assert.equal(a.trade_no,null);assert.equal(a.settlement_status,'created');
+ const a=await s.reserveForMember(alice,intent({amount:'12.34',currency:'MYR',requestKey}));
+ const b=await s.reserveForMember(alice,intent({amount:'12.34',currency:'MYR',requestKey}));
+ assert.equal(a.id,b.id);assert.equal(a.tenantId,'alpha');assert.equal(a.userId,'alice');
+ await assert.rejects(s.reserveForMember(alice,intent({amount:'12.35',currency:'MYR',requestKey})),/IDEMPOTENCY_CONFLICT/);
+ await assert.rejects(s.reserveForMember({...alice,tenantId:'beta'},intent({amount:'12.34',currency:'MYR',requestKey:'forged_tenant_request'})),/MEMBER_UNAVAILABLE/);
+ await assert.rejects(s.reserveForMember(owner,intent({amount:'12.34',currency:'MYR',requestKey:'owner_deposit_request'})),/MEMBER_UNAVAILABLE/);
+ assert.equal(a.tradeNo,null);assert.equal(a.settlementStatus,'created');
  assert.equal((await s.receive(raw({...a,trade_no:'early'}),auth)).status,503);
 });
 
@@ -75,16 +79,25 @@ test('a confirmed payment atomically creates one balanced credit, order record a
  const current=await find(order.id);assert.equal(current.settlement_status,'credited');assert.equal(current.verified_at,current.credited_at);
  const journal=await sql.prepare('SELECT * FROM portal_wallet_journal WHERE order_id=?').get(order.id);
  assert.equal(Number(journal.member_minor),1234);assert.equal(Number(journal.clearing_minor),-1234);assert.equal(journal.tenant_id,'alpha');
- const audit=await sql.prepare('SELECT * FROM audit WHERE action=?').get('VPay 充值核验并入账：'+order.id);assert.equal(audit.actor,'system:vpay');
+ const audit=await sql.prepare('SELECT * FROM audit WHERE action=?').get('VPay 充值独立查单并入账：'+order.id);assert.equal(audit.actor,'system:vpay');
  const statement=await (await records(boss)).json();const row=statement.records.find(r=>r.id===order.id);
- assert.equal(row.member,'alice');assert.equal(row.provider,'vpay');assert.equal(row.providerOrderId,order.trade_no);assert.equal(row.amountMinor,'1234');assert.equal(row.creditedMinor,'1234');assert.equal(row.status,'credited');
+ assert.equal(row.member,'alice');assert.equal(row.provider,'vpay');assert.equal(row.providerOrderId,order.tradeNo);assert.equal(row.amountMinor,'1234');assert.equal(row.creditedMinor,'1234');assert.equal(row.status,'credited');
 });
 
 test('concurrent and later duplicate notifications credit exactly once',async()=>{
  let calls=0;const s=core({verifyOrder:async order=>{calls++;return query(order);}}),order=await orderFor(s),before=await count('portal_wallet_journal');
  const results=await Promise.all(Array.from({length:12},()=>s.receive(raw(order),auth)));
- assert(results.every(r=>r.status===200));assert.equal(await count('portal_wallet_journal'),before+1);
+ assert(results.some(r=>r.status===200));assert(results.every(r=>[200,503].includes(r.status)));assert.equal(await count('portal_wallet_journal'),before+1);
  const queried=calls;assert.equal(await (await s.receive(raw(order),auth)).text(),'SUCCESS');assert.equal(calls,queried);
+});
+
+test('opt-in recovery independently queries known provider orders and never needs a duplicate callback',async()=>{
+ const recoveryEnv={...env,PORTAL_VPAY_RECOVERY_ENABLED:'true'},s=core({env:recoveryEnv}),order=await orderFor(s),before=await count('portal_wallet_journal');
+ const result=await s.recoverPending({limit:5});
+ assert.deepEqual(result,{enabled:true,processed:1,credited:1});
+ assert.equal(await count('portal_wallet_journal'),before+1);assert.equal((await find(order.id)).settlement_status,'credited');
+ assert.deepEqual(await s.recoverPending({limit:5}),{enabled:true,processed:0,credited:0});
+ assert.deepEqual(await core().recoverPending({limit:5}),{enabled:false,processed:0,credited:0});
 });
 
 test('wrong merchant, order, provider reference, currency or amount never credits and leaves a review record when bound',async()=>{
@@ -109,13 +122,14 @@ test('a paid browser claim, callback alone, pending query, failed query and mism
 });
 
 test('transaction failure after journal insertion rolls back the wallet, order and audit together',async()=>{
- const s=core(),order=await orderFor(s),before=await count('portal_wallet_journal'),prepare=sql.prepare;
+ let clock=new Date('2026-10-23T10:00:00.000Z');const s=core({now:()=>new Date(clock)}),order=await orderFor(s),before=await count('portal_wallet_journal'),prepare=sql.prepare;
  try{
   sql.prepare=function(source){if(source.startsWith('INSERT INTO audit'))throw Error('synthetic audit failure');return prepare(source);};
   assert.equal((await s.receive(raw(order),auth)).status,503);
  }finally{sql.prepare=prepare;}
  assert.equal(await count('portal_wallet_journal'),before);const current=await find(order.id);assert.equal(current.settlement_status,'pending');assert.equal(current.credited_at,null);
  const failed=await (await records(boss)).json(),failure=failed.records.find(r=>r.id===order.id);assert.equal(failure.reviewRequired,false);assert(failure.reviews.some(r=>r.reason==='VPAY_SETTLEMENT_RETRY'));
+ clock=new Date(clock.getTime()+61_000);
  assert.equal((await s.receive(raw(order),auth)).status,200);assert.equal(await count('portal_wallet_journal'),before+1);
 });
 
@@ -130,7 +144,7 @@ test('staff assignments block new VPay orders and hold pre-promotion orders with
  const s=core(),charlie={userId:'charlie',email:'charlie@example.test',role:'customer',tenantId:'alpha'};
  await sql.prepare('INSERT INTO portal_staff VALUES (?,?,?)').run(charlie.userId,'alpha','employee');
  try{
-  await assert.rejects(s.reserveForMember(charlie,{amount:'12.34',currency:'MYR',requestKey:'staff_reserve_request_01'}),/MEMBER_UNAVAILABLE/);
+  await assert.rejects(s.reserveForMember(charlie,intent({amount:'12.34',currency:'MYR',requestKey:'staff_reserve_request_01'})),/MEMBER_UNAVAILABLE/);
  }finally{await sql.prepare('DELETE FROM portal_staff WHERE user_id=?').run(charlie.userId);}
 
  const order=await orderFor(s,alice),before=await count('portal_wallet_journal');

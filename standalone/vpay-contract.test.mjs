@@ -132,8 +132,9 @@ test('provider failure text, extra fields, signatures and recipient bank details
   const extra = { sign: marker, token: marker, acc_name: marker, acc_no: marker, bank_name: marker, extension: marker };
   const value = response(extra); value.msg = marker;
   for (const result of [inspectVPayCreateResult(value, expected), inspectVPayQueryResult(value, expected), inspectVPayNotification(data(extra), expected)]) assert(!JSON.stringify(result).includes(marker));
+  assert.equal(inspectVPayCreateResult({ code: '0', data: data() }, expected).providerState, 'order_created');
   errorCode(() => inspectVPayCreateResult({ code: 9, msg: marker, sign: marker }, expected), 'VPAY_PROVIDER_REJECTED');
-  errorCode(() => inspectVPayCreateResult({ code: '0', data: data() }, expected), 'VPAY_INVALID_RESPONSE_CODE');
+  errorCode(() => inspectVPayCreateResult({ code: '00', data: data() }, expected), 'VPAY_INVALID_RESPONSE_CODE');
   for (const malformed of [null, [], 'not-json', new Date()]) errorCode(() => inspectVPayQueryResult(malformed, expected), 'VPAY_INVALID_OBJECT');
 });
 

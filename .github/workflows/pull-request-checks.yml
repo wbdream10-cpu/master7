@@ -48,6 +48,9 @@ jobs:
       - name: Run payment contract tests
         run: npm run test:payments
 
+      - name: Run durable VPay runtime tests
+        run: npm run test:vpay-runtime
+
       - name: Run wallet tests
         run: npm run test:wallet
 
@@ -65,6 +68,9 @@ jobs:
 
       - name: Run owner setup tests
         run: npm run test:owner-bootstrap
+
+      - name: Run member tenant identity tests
+        run: npm run test:member-identity
 
       - name: Run custom origin tests when present
         run: npm run test:origins --if-present
