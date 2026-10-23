@@ -325,8 +325,8 @@ export function createBankDeposits({now=()=>new Date(),rateLimit=limited,env=pro
      const latest=await sql.prepare(`SELECT ${depositProjection()} FROM portal_bank_deposits WHERE id=? AND tenant_id=?`).get(id,scope.tenantId),duplicate=latest?.reviewed_by===scope.identity.id&&latest.review_request_key===data.reviewKey&&latest.review_fingerprint===fingerprint;
      await sql.exec('ROLLBACK');return duplicate?json({deposit:publicDeposit(latest),duplicate:true}):json({error:'记录或银行单据已变化，请刷新'},409);
     }
-    await sql.prepare(`INSERT INTO portal_payment_orders(id,tenant_id,user_id,request_key,merchant_id,environment,amount_minor,currency,trade_no,settlement_status,review_required,created_at,verified_at,credited_at,create_outcome,trade_code)
-     VALUES (?,?,?,?,?,'production',?,'MYR',?,'credited',0,?,?,?,'created','bank_transfer')`).run(id,scope.tenantId,row.user_id,'bank_'+id,'manual_bank',row.amount_minor,id,row.created_at,at,at);
+    await sql.prepare(`INSERT INTO portal_payment_orders(id,tenant_id,user_id,request_key,merchant_id,environment,amount_minor,currency,trade_no,settlement_status,review_required,created_at,verified_at,credited_at,create_outcome,trade_code,provider)
+     VALUES (?,?,?,?,?,'production',?,'MYR',?,'credited',0,?,?,?,'created','bank_transfer','bank_transfer')`).run(id,scope.tenantId,row.user_id,'bank_'+id,'manual_bank',row.amount_minor,id,row.created_at,at,at);
     await sql.prepare(`INSERT INTO portal_wallet_journal(id,order_id,tenant_id,user_id,environment,currency,member_minor,clearing_minor,created_at)
      VALUES (?,?,?,?,?,'MYR',?,?,?)`).run(randomUUID(),id,scope.tenantId,row.user_id,'production',row.amount_minor,-row.amount_minor,at);
     await sql.prepare('INSERT INTO audit(id,tenant_id,actor,action,created_at) VALUES (?,?,?,?,?)').run(randomUUID(),scope.tenantId,scope.identity.email,'核对银行到账并单次入账：'+id,at);
@@ -358,25 +358,33 @@ export function createBankDeposits({now=()=>new Date(),rateLimit=limited,env=pro
   const bankSubmitted=await sql.prepare(`SELECT count(*) AS count,CAST(COALESCE(SUM(amount_minor),0) AS TEXT) AS amount FROM portal_bank_deposits
    WHERE tenant_id=? AND created_at>=? AND created_at<?`).get(scope.tenantId,from,to);
   const vpaySubmitted=await sql.prepare(`SELECT count(*) AS count,CAST(COALESCE(SUM(amount_minor),0) AS TEXT) AS amount FROM portal_payment_orders
-   WHERE tenant_id=? AND environment='production' AND merchant_id<>'manual_bank' AND created_at>=? AND created_at<?`).get(scope.tenantId,from,to);
+   WHERE tenant_id=? AND environment='production' AND provider='vpay' AND created_at>=? AND created_at<?`).get(scope.tenantId,from,to);
+  const gspaySubmitted=await sql.prepare(`SELECT count(*) AS count,CAST(COALESCE(SUM(amount_minor),0) AS TEXT) AS amount FROM portal_payment_orders
+   WHERE tenant_id=? AND environment='production' AND provider='gspay_myr' AND created_at>=? AND created_at<?`).get(scope.tenantId,from,to);
+  const unknownSubmitted=await sql.prepare(`SELECT count(*) AS count,CAST(COALESCE(SUM(amount_minor),0) AS TEXT) AS amount FROM portal_payment_orders
+   WHERE tenant_id=? AND environment='production' AND provider='unknown' AND created_at>=? AND created_at<?`).get(scope.tenantId,from,to);
   const pending=await sql.prepare(`SELECT count(*) AS count,CAST(COALESCE(SUM(amount_minor),0) AS TEXT) AS amount FROM portal_bank_deposits
    WHERE tenant_id=? AND status='awaiting_review'`).get(scope.tenantId);
   const bankCredited=await sql.prepare(`SELECT count(*) AS count,CAST(COALESCE(SUM(j.member_minor),0) AS TEXT) AS amount FROM portal_wallet_journal j
-   JOIN portal_payment_orders o ON o.id=j.order_id WHERE j.tenant_id=? AND j.environment='production' AND o.merchant_id='manual_bank' AND j.created_at>=? AND j.created_at<?`).get(scope.tenantId,from,to);
+   JOIN portal_payment_orders o ON o.id=j.order_id WHERE j.tenant_id=? AND j.environment='production' AND o.provider='bank_transfer' AND j.created_at>=? AND j.created_at<?`).get(scope.tenantId,from,to);
   const vpayCredited=await sql.prepare(`SELECT count(*) AS count,CAST(COALESCE(SUM(j.member_minor),0) AS TEXT) AS amount FROM portal_wallet_journal j
-   JOIN portal_payment_orders o ON o.id=j.order_id WHERE j.tenant_id=? AND j.environment='production' AND o.merchant_id<>'manual_bank' AND j.created_at>=? AND j.created_at<?`).get(scope.tenantId,from,to);
+   JOIN portal_payment_orders o ON o.id=j.order_id WHERE j.tenant_id=? AND j.environment='production' AND o.provider='vpay' AND j.created_at>=? AND j.created_at<?`).get(scope.tenantId,from,to);
+  const gspayCredited=await sql.prepare(`SELECT count(*) AS count,CAST(COALESCE(SUM(j.member_minor),0) AS TEXT) AS amount FROM portal_wallet_journal j
+   JOIN portal_payment_orders o ON o.id=j.order_id WHERE j.tenant_id=? AND j.environment='production' AND o.provider='gspay_myr' AND j.created_at>=? AND j.created_at<?`).get(scope.tenantId,from,to);
+  const unknownCredited=await sql.prepare(`SELECT count(*) AS count,CAST(COALESCE(SUM(j.member_minor),0) AS TEXT) AS amount FROM portal_wallet_journal j
+   JOIN portal_payment_orders o ON o.id=j.order_id WHERE j.tenant_id=? AND j.environment='production' AND o.provider='unknown' AND j.created_at>=? AND j.created_at<?`).get(scope.tenantId,from,to);
   const bankAccount=await sql.prepare('SELECT enabled FROM portal_bank_accounts WHERE tenant_id=?').get(scope.tenantId);
   const registrations=await sql.prepare(`SELECT count(*) AS count FROM portal_users u LEFT JOIN members m ON m.email=u.email LEFT JOIN portal_staff p ON p.user_id=u.id
    WHERE u.role='customer' AND p.user_id IS NULL AND COALESCE(m.tenant_id,'main')=? AND u.created_at>=? AND u.created_at<?`).get(scope.tenantId,from,to);
-  const submittedCount=Number(bankSubmitted.count)+Number(vpaySubmitted.count),submittedAmount=(BigInt(bankSubmitted.amount)+BigInt(vpaySubmitted.amount)).toString();
-  const creditedCount=Number(bankCredited.count)+Number(vpayCredited.count),creditedAmount=(BigInt(bankCredited.amount)+BigInt(vpayCredited.amount)).toString();
-  const zero={count:0,amountMinor:'0',submitted:{count:0,amountMinor:'0'},credited:{count:0,amountMinor:'0'}};
+  const submittedCount=Number(bankSubmitted.count)+Number(vpaySubmitted.count)+Number(gspaySubmitted.count)+Number(unknownSubmitted.count),submittedAmount=(BigInt(bankSubmitted.amount)+BigInt(vpaySubmitted.amount)+BigInt(gspaySubmitted.amount)+BigInt(unknownSubmitted.amount)).toString();
+  const creditedCount=Number(bankCredited.count)+Number(vpayCredited.count)+Number(gspayCredited.count)+Number(unknownCredited.count),creditedAmount=(BigInt(bankCredited.amount)+BigInt(vpayCredited.amount)+BigInt(gspayCredited.amount)+BigInt(unknownCredited.amount)).toString();
   const vpayEnabled=vpayProductionReady(env);
   return json({tenantId:scope.tenantId,date:localDate,timeZone:'Asia/Kuching',range:{from,to},
    deposits:{definition:'submitted orders or bank-transfer claims created during the local day; credited totals count wallet journal entries created during the local day',
     submitted:{count:submittedCount,amountMinor:submittedAmount},credited:{count:creditedCount,amountMinor:creditedAmount},channels:{
      vpay:{enabled:vpayEnabled,count:Number(vpaySubmitted.count),amountMinor:String(vpaySubmitted.amount),submitted:{count:Number(vpaySubmitted.count),amountMinor:String(vpaySubmitted.amount)},credited:{count:Number(vpayCredited.count),amountMinor:String(vpayCredited.amount)}},
-     gspay_myr:{enabled:false,...zero},
+     gspay_myr:{enabled:false,count:Number(gspaySubmitted.count),amountMinor:String(gspaySubmitted.amount),submitted:{count:Number(gspaySubmitted.count),amountMinor:String(gspaySubmitted.amount)},credited:{count:Number(gspayCredited.count),amountMinor:String(gspayCredited.amount)}},
+     unknown:{enabled:false,count:Number(unknownSubmitted.count),amountMinor:String(unknownSubmitted.amount),submitted:{count:Number(unknownSubmitted.count),amountMinor:String(unknownSubmitted.amount)},credited:{count:Number(unknownCredited.count),amountMinor:String(unknownCredited.amount)}},
      bank_transfer:{enabled:Boolean(bankAccount?.enabled),count:Number(bankSubmitted.count),amountMinor:String(bankSubmitted.amount),submitted:{count:Number(bankSubmitted.count),amountMinor:String(bankSubmitted.amount)},credited:{count:Number(bankCredited.count),amountMinor:String(bankCredited.amount)}}}},
    bankPendingReview:{count:Number(pending.count),amountMinor:String(pending.amount)},
    withdrawals:{enabled:false,count:0,amountMinor:'0'},newRegistrations:Number(registrations.count)});

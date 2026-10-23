@@ -128,7 +128,7 @@ button:focus-visible,a:focus-visible{outline-color:#4f8fc9}
 .finance-summary article>span{display:block;padding-right:22px;color:#7898b7;font-size:10px}
 .finance-summary article>strong{display:block;margin-top:12px;color:#eff7ff;font-size:16px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .finance-summary article>small{margin-top:6px;color:#6687a7}
-.finance-channels{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}
+.finance-channels{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:10px}
 .finance-channels>div{display:grid;grid-template-columns:1fr auto;align-items:center;gap:5px 10px;min-width:0;padding:12px 14px;border:1px solid #203750;border-radius:10px;background:#071422}
 .finance-channels b{color:#bdd2e5;font-size:11px}
 .finance-channels strong{grid-column:1/-1;color:#7898b7;font-size:11px;font-weight:500;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
