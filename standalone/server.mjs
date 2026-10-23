@@ -81,6 +81,7 @@ async function handle(req){const url=new URL(req.url,origin);const user=(await s
   if(!config)return new Response('Not found',{status:404});
   if((await sql.prepare("SELECT id FROM portal_users WHERE role='owner'").get()))return ownerSetupClosed();
   if(config.expiresAt<=Date.now())return ownerSetupClosed('一次性开户期限已结束，请由部署负责人重新签发。');
+  if((await sql.prepare('SELECT id FROM portal_users WHERE username=? OR email=?').get(config.username,config.email)))return ownerSetupClosed('开户配置不可用，请由部署负责人重新签发。',409);
   if(method==='GET')return ownerSetupPage(config);
   if(!String(req.headers['content-type']).startsWith('application/x-www-form-urlencoded'))return json({error:'请求格式错误'},415);
   const ip=req.socket.remoteAddress||'unknown';if(await limited('owner-bootstrap-ip:'+ip,10))return ownerSetupPage(config,'尝试次数过多，请 15 分钟后再试。',429);

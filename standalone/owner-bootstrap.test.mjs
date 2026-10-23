@@ -53,6 +53,11 @@ try{
  assert.equal(reservedEmail.status,409);
  assert.equal((await sql.prepare('SELECT count(*) AS count FROM portal_users').get()).count,0);
 
+ const occupiedId=randomUUID();await sql.prepare('INSERT INTO portal_users VALUES (?,?,?,?,?,?,?,?)').run(occupiedId,'master7hq','existing@example.test','test-password-hash','customer',0,'test-recovery-hash',new Date().toISOString());
+ assert.equal((await request('/owner-setup')).status,409);
+ assert.equal((await form({bootstrapToken,password,confirmPassword:password})).status,409);
+ await sql.prepare('DELETE FROM portal_users WHERE id=?').run(occupiedId);
+
  assert.equal((await form({bootstrapToken,password,confirmPassword:password},{origin:'https://evil.example.test'})).status,403);
  assert.equal((await request('/owner-setup',{method:'POST',headers:{origin:process.env.PUBLIC_ORIGIN,'content-type':'application/json'},body:'{}'})).status,415);
  let rejected=await form({bootstrapToken:'wrong-token-with-at-least-thirty-two-bytes',password,confirmPassword:password});
