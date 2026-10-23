@@ -1,0 +1,70 @@
+name: Pull Request Checks
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pull-request-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: build-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Build production assets
+        run: npm run build
+
+      - name: Run core tests
+        run: npm test
+
+      - name: Run PostgreSQL adapter tests
+        run: npm run test:postgres
+
+      - name: Run migration tests
+        run: npm run test:migrations
+
+      - name: Run storage tests
+        run: npm run test:storage
+
+      - name: Run payment contract tests
+        run: npm run test:payments
+
+      - name: Run wallet tests
+        run: npm run test:wallet
+
+      - name: Run wallet HTTP tests
+        run: npm run test:wallet:http
+
+      - name: Run checkout tests
+        run: npm run test:checkout
+
+      - name: Run sponsored game tests
+        run: npm run test:games
+
+      - name: Run bank deposit tests
+        run: npm run test:bank-deposits
+
+      - name: Run owner setup tests
+        run: npm run test:owner-bootstrap
+
+      - name: Run custom origin tests when present
+        run: npm run test:origins --if-present
