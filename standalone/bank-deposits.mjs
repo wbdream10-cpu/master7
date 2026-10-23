@@ -162,6 +162,29 @@ const publicDeposit=row=>({
  status:row.status,receipt:receiptMeta(row),reviewReason:row.review_reason||null,reviewedAt:row.reviewed_at||null,
  walletOrderId:row.wallet_order_id||null,createdAt:row.created_at,
 });
+const bankDepositStatuses=new Set(['all','awaiting_review','approved','rejected']);
+const localDate=value=>typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value+'T00:00:00Z'))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;
+const shiftLocalDate=(value,days)=>{const [year,month,day]=value.split('-').map(Number);return new Date(Date.UTC(year,month-1,day+days)).toISOString().slice(0,10);};
+function bankDepositFilters(params,scope,reviewer){
+ const query=params&&typeof params.get==='function'?params:new URLSearchParams();
+ const status=query.get('status')||'all',rawMember=reviewer?(query.get('member')||''):'',member=rawMember.trim().replace(/\s+/gu,' '),from=query.get('from')||'',to=query.get('to')||'';
+ if(!bankDepositStatuses.has(status)||member.length>60||/[\u0000-\u001f\u007f]/u.test(member))return null;
+ if(Boolean(from)!==Boolean(to)||from&&(!localDate(from)||!localDate(to)||to<from||Date.parse(to)-Date.parse(from)>30*86400000))return null;
+ const range=from?{from:new Date(from+'T00:00:00+08:00').toISOString(),to:new Date(shiftLocalDate(to,1)+'T00:00:00+08:00').toISOString()}:null;
+ const fingerprint=digestObject({tenantId:scope.tenantId,userId:reviewer?null:scope.identity.id,status,member:member.toLowerCase(),from,to,reviewer});
+ return {status,member,from,to,range,fingerprint};
+}
+function escapedLike(value){return value.replace(/[!%_]/g,'!$&');}
+function bankDepositCursor(value,fingerprint){
+ if(!value)return {value:null};
+ try{
+  if(value.length>500||!/^[A-Za-z0-9_-]+$/.test(value))throw Error();
+  const decoded=JSON.parse(Buffer.from(value,'base64url').toString());
+  if(decoded?.v!==1||![0,1].includes(decoded.priority)||!exactTime(decoded.at)||!idPattern.test(decoded.id||'')||decoded.filter!==fingerprint)throw Error();
+  return {value:decoded};
+ }catch{return {error:json({error:'分页标识无效或筛选条件已变化'},400)};}
+}
+const encodedBankDepositCursor=(row,fingerprint)=>Buffer.from(JSON.stringify({v:1,priority:row.status==='awaiting_review'?0:1,at:row.created_at,id:row.id,filter:fingerprint})).toString('base64url');
 
 function normalizedConfiguration(data){
  const bankName=text(data?.bankName,2,80),accountHolder=text(data?.accountHolder,2,100),accountNumber=text(data?.accountNumber,4,34);
@@ -232,13 +255,36 @@ export function createBankDeposits({now=()=>new Date(),rateLimit=limited,env=pro
   return json({tenantId:scope.tenantId,userId:target.id,finance:data.enabled});
  });}
 
- async function list(user,selected=null){return withStorage(async()=>{
+ async function list(user,selected=null,params=new URLSearchParams()){return withStorage(async()=>{
   const scope=await canonicalScope(user,selected);if(scope.error)return scope.error;
   if(!scope.customer&&!scope.manager&&!scope.finance)return json({error:'没有银行转账记录权限'},403);
-  const manager=scope.manager||scope.finance;
+  const reviewer=scope.manager||scope.finance,filters=bankDepositFilters(params,scope,reviewer);
+  if(!filters)return json({error:'筛选条件无效；日期最多选择 31 天（Asia/Kuching）'},400);
+  const parsedCursor=bankDepositCursor(params&&typeof params.get==='function'?params.get('cursor'):null,filters.fingerprint);if(parsedCursor.error)return parsedCursor.error;
+  const where=['d.tenant_id=?'],values=[scope.tenantId];
+  if(!reviewer){where.push('d.user_id=?');values.push(scope.identity.id);}
+  if(filters.status!=='all'){where.push('d.status=?');values.push(filters.status);}
+  if(filters.member){where.push("LOWER(u.username) LIKE ? ESCAPE '!'");values.push('%'+escapedLike(filters.member.toLowerCase())+'%');}
+  if(filters.range){where.push('d.created_at>=?','d.created_at<?');values.push(filters.range.from,filters.range.to);}
+  const summary=await sql.prepare(`SELECT count(*) AS count,CAST(COALESCE(SUM(d.amount_minor),0) AS TEXT) AS amount,
+   COALESCE(SUM(CASE WHEN d.status='awaiting_review' THEN 1 ELSE 0 END),0) AS pending_count,
+   CAST(COALESCE(SUM(CASE WHEN d.status='awaiting_review' THEN d.amount_minor ELSE 0 END),0) AS TEXT) AS pending_amount
+   FROM portal_bank_deposits d JOIN portal_users u ON u.id=d.user_id WHERE ${where.join(' AND ')}`).get(...values);
+  const cursorValues=[];let cursorWhere='';
+  if(parsedCursor.value){
+   const cursor=parsedCursor.value;
+   if(reviewer){
+    const priority="CASE WHEN d.status='awaiting_review' THEN 0 ELSE 1 END";
+    cursorWhere=` AND (${priority}>? OR (${priority}=? AND (d.created_at<? OR (d.created_at=? AND d.id<?))))`;
+    cursorValues.push(cursor.priority,cursor.priority,cursor.at,cursor.at,cursor.id);
+   }else{cursorWhere=' AND (d.created_at<? OR (d.created_at=? AND d.id<?))';cursorValues.push(cursor.at,cursor.at,cursor.id);}
+  }
+  const order=reviewer?"CASE WHEN d.status='awaiting_review' THEN 0 ELSE 1 END ASC,d.created_at DESC,d.id DESC":'d.created_at DESC,d.id DESC';
   const rows=await sql.prepare(`SELECT ${depositProjection('d.')},u.username FROM portal_bank_deposits d JOIN portal_users u ON u.id=d.user_id
-   WHERE d.tenant_id=?${manager?'':' AND d.user_id=?'} ORDER BY d.created_at DESC,d.id DESC LIMIT 100`).all(...(manager?[scope.tenantId]:[scope.tenantId,scope.identity.id]));
-  return json({tenantId:scope.tenantId,canReview:manager,deposits:rows.map(publicDeposit)});
+   WHERE ${where.join(' AND ')}${cursorWhere} ORDER BY ${order} LIMIT 51`).all(...values,...cursorValues);
+  const page=rows.slice(0,50),last=page.at(-1);
+  return json({tenantId:scope.tenantId,canReview:reviewer,deposits:page.map(publicDeposit),summary:{count:Number(summary.count),amountMinor:String(summary.amount),pendingCount:Number(summary.pending_count),pendingAmountMinor:String(summary.pending_amount)},
+   filters:{status:filters.status,member:filters.member,from:filters.from||null,to:filters.to||null,timeZone:'Asia/Kuching'},nextCursor:rows.length>50&&last?encodedBankDepositCursor(last,filters.fingerprint):null});
  });}
 
  async function submit(user,selected,data){return withStorage(async()=>{

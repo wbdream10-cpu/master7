@@ -15,6 +15,7 @@ import {createVPayCheckout} from './vpay-checkout.mjs';
 import {createSponsoredGamesHandler} from './sponsored-games.mjs';
 import {BankReceiptUploadError,createBankDeposits,readBankReceiptBody} from './bank-deposits.mjs';
 import {createWithdrawals} from './withdrawals.mjs';
+import {createFinanceReconciliation} from './finance-reconciliation.mjs';
 const loopbackHosts=new Set(['127.0.0.1','localhost','[::1]']);
 function configuredWebOrigin(value,name){
  const raw=String(value||'').trim();
@@ -92,6 +93,7 @@ const sponsoredGames=createSponsoredGamesHandler({
 });
 const bankDeposits=createBankDeposits();
 const withdrawals=createWithdrawals();
+const financeReconciliation=createFinanceReconciliation();
 async function dispatch(req){
  const url=new URL(req.url,origin);
  if(unavailableGspayPublicPaths.has(url.pathname))return json({error:'Not found'},404);
@@ -127,7 +129,7 @@ async function dispatch(req){
   if(req.method==='GET'){
    if(bankReview)return json({error:'Method not allowed'},405);
    if(url.pathname==='/api/v1/bank-transfer/config')return bankDeposits.getConfiguration(user,tenant);
-   if(url.pathname==='/api/v1/bank-deposits')return bankDeposits.list(user,tenant);
+   if(url.pathname==='/api/v1/bank-deposits')return bankDeposits.list(user,tenant,url.searchParams);
    if(url.pathname==='/api/v1/finance-staff')return bankDeposits.listFinanceStaff(user,tenant);
   }
   if(req.method!=='POST')return json({error:'Method not allowed'},405);
@@ -148,8 +150,8 @@ async function dispatch(req){
   if(req.method==='GET'){
    if(withdrawalReview)return json({error:'Method not allowed'},405);
    if(url.pathname==='/api/v1/withdrawals/config')return withdrawals.configuration(user,tenant);
-   if(url.pathname==='/api/v1/withdrawals/export')return withdrawals.exportRecords(user,tenant);
-   return withdrawals.list(user,tenant);
+   if(url.pathname==='/api/v1/withdrawals/export')return withdrawals.exportRecords(user,tenant,url.searchParams);
+   return withdrawals.list(user,tenant,url.searchParams);
   }
   if(req.method!=='POST'||url.pathname.endsWith('/config')||url.pathname.endsWith('/export'))return json({error:'Method not allowed'},405);
   if(!user)return json({error:'请先登录'},401);
@@ -158,6 +160,11 @@ async function dispatch(req){
   let data;try{data=JSON.parse((await bodyOf(req)).toString('utf8'));}catch{return json({error:'请求格式错误'},400);}
   if(!data||typeof data!=='object'||Array.isArray(data))return json({error:'请求格式错误'},400);
   return withdrawalReview?withdrawals.review(user,tenant,withdrawalReview[1],data):withdrawals.submit(user,tenant,data);
+ }
+ if(['/api/v1/finance-reconciliation','/api/v1/finance-reconciliation/export'].includes(url.pathname)){
+  if(req.method!=='GET')return json({error:'Method not allowed'},405);
+  const user=await withStorage(()=>sessionUser(req.headers.cookie));
+  return url.pathname.endsWith('/export')?financeReconciliation.exportRecords(user,url.searchParams):financeReconciliation.getSummary(user,url.searchParams);
  }
  if(url.pathname==='/api/v1/sponsored-games'){
   if(req.method!=='GET')return json({error:'Method not allowed'},405);

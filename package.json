@@ -20,6 +20,7 @@
     "test:games": "node standalone/sponsored-games.test.mjs && node standalone/sponsored-games-http.test.mjs",
     "test:bank-deposits": "node standalone/bank-deposits.test.mjs && node standalone/bank-deposits.test.mjs --postgres && node standalone/bank-deposits-http.test.mjs",
     "test:withdrawals": "node standalone/withdrawals.test.mjs && node standalone/withdrawals.test.mjs --postgres && node standalone/withdrawals-http.test.mjs",
+    "test:finance-reconciliation": "node standalone/finance-reconciliation.test.mjs && node standalone/finance-reconciliation.test.mjs --postgres && node standalone/finance-reconciliation-http.test.mjs",
     "test:origins": "node standalone/server-origin-config.test.mjs",
     "test:owner-bootstrap": "node standalone/owner-bootstrap.test.mjs && node standalone/owner-bootstrap.test.mjs --postgres"
   },
