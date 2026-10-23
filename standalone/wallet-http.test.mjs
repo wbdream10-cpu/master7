@@ -48,6 +48,8 @@ try{
  assert.equal((await call('/api/v1/payments/vpay/orders',{method:'POST',headers:{...headers,'X-Portal-Request':''},body:JSON.stringify(data)})).status,415);
  assert.equal((await call('/api/v1/payments/vpay/orders',{method:'POST',headers:{...headers,Cookie:ownerCookie},body:JSON.stringify(data)})).status,403);
  const created=await call('/api/v1/payments/vpay/orders',{method:'POST',headers:{...headers,Origin:'https://master7.best'},body:JSON.stringify(data)});assert.equal(created.status,200);order=await created.json();assert.equal(order.status,'awaiting_payment');assert.equal(order.payUrl,'https://payment.vpay.club/pay/synthetic');assert.equal(createCalls,1);
+ const customOriginPortal=await call('/api/portal',{method:'POST',headers:{Cookie:ownerCookie,Origin:'https://master7.best','Content-Type':'application/json','X-Portal-Request':'1'},body:JSON.stringify({action:'unknown'})});assert.equal(customOriginPortal.status,400,'allowlisted custom origins must pass the portal mutation origin check');
+ assert.equal((await call('/api/portal',{method:'POST',headers:{Cookie:ownerCookie,Origin:'https://attacker.example.test','Content-Type':'application/json','X-Portal-Request':'1'},body:JSON.stringify({action:'unknown'})})).status,403,'untrusted origins must remain blocked');
  const duplicate=await (await call('/api/v1/payments/vpay/orders',{method:'POST',headers,body:JSON.stringify(data)})).json();assert.equal(duplicate.id,order.id);assert.equal(createCalls,1);
  assert.equal((await call('/payment-return?state=3&amount=1000',{headers:{Cookie:memberCookie}})).status,200);
  assert.equal((await (await call('/api/v1/wallet?environment=uat',{headers:{Cookie:memberCookie}})).json()).balanceMinor,'0');

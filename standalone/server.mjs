@@ -261,7 +261,7 @@ async function handle(req){const url=new URL(req.url,origin);const user=(await s
  }
  if(url.pathname==='/api/portal'){
   if(!['GET','POST'].includes(method))return json({error:'Method not allowed'},405);
-  const data=method==='POST'?await bodyOf(req):undefined;const request=new Request(new URL(url.pathname+url.search,origin),{method,headers:{origin:req.headers.origin||'','content-type':String(req.headers['content-type']||''),'x-portal-request':String(req.headers['x-portal-request']||'')},body:data});
+  const data=method==='POST'?await bodyOf(req):undefined;const requestOrigin=originAllowed(req.headers.origin)?req.headers.origin:origin.origin;const request=new Request(new URL(url.pathname+url.search,requestOrigin),{method,headers:{origin:req.headers.origin||'','content-type':String(req.headers['content-type']||''),'x-portal-request':String(req.headers['x-portal-request']||'')},body:data});
   return identity.run(user,()=>method==='POST'?api.POST(request):api.GET(request));
  }
  if(url.pathname==='/accounts'||url.pathname.startsWith('/accounts/')){
