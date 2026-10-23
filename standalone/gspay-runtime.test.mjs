@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createGSPayRuntime, GSPAY_CALLBACK_MAX_BYTES, GSPAY_SETTLEMENT_DISABLED } from './gspay-runtime.mjs';
+import {
+  createGSPayRuntime,
+  GSPAY_CALLBACK_MAX_BYTES,
+  GSPAY_CREATE_SCHEMA_UNCONFIRMED,
+  GSPAY_SETTLEMENT_DISABLED,
+} from './gspay-runtime.mjs';
 
 const callbackToken = 'synthetic-gspay-callback-token-at-least-32-bytes';
 const owner = { userId: 'owner', email: 'owner@example.test', role: 'owner', tenantId: null };
@@ -51,10 +56,12 @@ test('authenticated config is tenant-scoped, fixed closed, and fully sanitized',
     enabled: false,
     ordersEnabled: false,
     callbacksEnabled: false,
+    queryEnabled: false,
     settlementEnabled: false,
+    providerSchemaConfirmed: false,
     liveReady: false,
     mode: 'disabled',
-    blockers: [GSPAY_SETTLEMENT_DISABLED],
+    blockers: [GSPAY_CREATE_SCHEMA_UNCONFIRMED, GSPAY_SETTLEMENT_DISABLED],
   });
   const serialized = JSON.stringify(result);
   for (const forbidden of [callbackToken, 'private-auth-key', 'private-secret-key', '192.0.2.77', 'configured', 'token', 'secret', 'ip']) {

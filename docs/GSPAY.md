@@ -4,6 +4,21 @@
 
 `standalone/gspay-contract.mjs` 只处理 MYR 金额、签名和状态规则。它接收运行时传入的签名资料，但不自行从环境读取、不持久化、不投影商户凭据，也不发出网络请求或修改数据库。`standalone/gspay-runtime.mjs` 另外提供一个默认关闭的内部边界；它同样不会联系厂家、保存回调、建立订单或修改钱包。GSPAY+ MYR 充值、DuitNow、USDT 和提款通道仍保持关闭。
 
+## 本轮源码准备边界
+
+以下文件是供后续厂家沙箱联调使用的内部基础，当前没有接入会员建单或厂家公开回调路由：
+
+| 文件 | 已实现的边界 | 当前关闭条件 |
+| --- | --- | --- |
+| `standalone/gspay-provider.mjs` | 门户只可连接固定 MASTER7 集成网关；订单、查询与回调机器凭据相互隔离；查询请求携带平台保存的订单、会员和精确金额预期值 | `status()` 的协议、建单、查询、回调及上线状态均为未就绪；建单在任何网络请求前返回 `GSPAY_CREATE_SCHEMA_UNCONFIRMED` |
+| `standalone/gspay-checkout-core.mjs` | 约束本地幂等订单、一次建单、失联订单保持未知、脱敏回调收件、独立查单以及单一原子结算能力 | 没有存储和 HTTP 运行时接线；只有显式开关、版本化网关能力与全部依赖同时通过才可能进入流程 |
+| `0009_gspay_myr_checkout.sql` | 为 SQLite 与 PostgreSQL 增加厂家应付金额、脱敏回调 inbox 和调用尝试表；约束 GSPAY 订单、哈希、金额、状态和回调/订单归属 | 迁移只建立空结构，不导入旧订单，不创建生产记录，不启用任何通道 |
+| `app/portal.tsx` | 会员和总部可读取脱敏的接线状态 | 没有金额表单、订单提交、厂家跳转或自动入账操作 |
+
+门户进程不保存厂家 auth key 或 secret，也不直连 `api.thegspay.com`。新增表明确不保存原始 JSON、签名、remark、auth key、secret 或银行资料。合成测试验证默认关闭零网络/零写入、建单幂等、未知结果不自动重发、回调只记录安全投影、独立查询匹配以及只有单一 `commitConfirmed` 原子能力可以完成入账；这些测试不等于真实厂家联调或生产验收。
+
+本轮没有创建真实 GSPAY 订单、查询生产余额、保存厂家 Callback Settings、处理真钱或增加会员钱包，也没有修改 `master7.vip`、`master7.best`、DNS、TLS 或 Cloudflare 配置。
+
 ## 默认关闭的门户运行时边界
 
 门户提供以下三个受控路径：

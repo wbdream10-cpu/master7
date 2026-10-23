@@ -79,8 +79,10 @@ try {
   const memberStatus = await (await call('/api/v1/payments/gspay/config', { headers: { Cookie: cookies.member } })).json();
   assert.deepEqual(memberStatus, {
     tenantId: 'alpha', provider: 'gspay_myr', currency: 'MYR', enabled: false,
-    ordersEnabled: false, callbacksEnabled: false, settlementEnabled: false,
-    liveReady: false, mode: 'disabled', blockers: ['GSPAY_SETTLEMENT_DISABLED'],
+    ordersEnabled: false, callbacksEnabled: false, queryEnabled: false,
+    settlementEnabled: false, providerSchemaConfirmed: false,
+    liveReady: false, mode: 'disabled',
+    blockers: ['GSPAY_CREATE_SCHEMA_UNCONFIRMED', 'GSPAY_SETTLEMENT_DISABLED'],
   });
   const ownerStatus = await (await call('/api/v1/payments/gspay/config?tenant=beta', { headers: { Cookie: cookies.owner } })).json();
   assert.equal(ownerStatus.tenantId, 'beta');
