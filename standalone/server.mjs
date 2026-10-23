@@ -9,6 +9,7 @@ import * as api from './dist/api.mjs';
 import {listConnections,configureConnection,receiveEvent,listEvents} from './connections.mjs';
 import {getDepositRequests,createDepositRequest} from './deposit.mjs';
 import {createPaymentChannelsHandler} from './payment-channels.mjs';
+import {createGSPayRuntime} from './gspay-runtime.mjs';
 import {createVPaySettlement,getWallet,getPaymentRecords} from './wallet.mjs';
 import {createVPayCheckout} from './vpay-checkout.mjs';
 import {createSponsoredGamesHandler} from './sponsored-games.mjs';
@@ -67,6 +68,22 @@ const getPaymentChannels=createPaymentChannelsHandler({
  getMemberTenant:email=>withStorage(async()=>{const member=await sql.prepare('SELECT tenant_id FROM members WHERE email=?').get(email);return member?.tenant_id||null;}),
  tenantExists:id=>withStorage(async()=>Boolean(await sql.prepare('SELECT id FROM brands WHERE id=?').get(id))),
 });
+const gspayRuntime=createGSPayRuntime({
+ getMemberTenant:email=>withStorage(async()=>{const member=await sql.prepare('SELECT tenant_id FROM members WHERE email=?').get(email);return member?.tenant_id||null;}),
+ tenantExists:id=>withStorage(async()=>Boolean(await sql.prepare('SELECT id FROM brands WHERE id=?').get(id))),
+});
+const gspayCallbackPaths=new Map([
+ ['/api/v1/payment-callbacks/gspay/payment','payment'],
+ ['/api/v1/payment-callbacks/gspay/duitnow','duitnow'],
+]);
+const unavailableGspayPublicPaths=new Set([
+ '/api/payment/gspay/callback',
+ '/api/payment/gspay/duitnow/callback',
+ '/api/payment/gspay/payout/callback',
+ '/api/v1/payments/gspay/orders',
+ '/api/v1/payment-callbacks/gspay/payout',
+ '/api/v1/payment-callbacks/gspay/usdt',
+]);
 const vpaySettlement=createVPaySettlement();
 const vpayCheckout=createVPayCheckout({settlement:vpaySettlement});
 const sponsoredGames=createSponsoredGamesHandler({
@@ -77,6 +94,17 @@ const bankDeposits=createBankDeposits();
 const withdrawals=createWithdrawals();
 async function dispatch(req){
  const url=new URL(req.url,origin);
+ if(unavailableGspayPublicPaths.has(url.pathname))return json({error:'Not found'},404);
+ const gspayChannel=gspayCallbackPaths.get(url.pathname);
+ if(gspayChannel){
+  if(req.method!=='POST')return json({error:'Method not allowed'},405);
+  return gspayRuntime.receive({authorization:req.headers.authorization,contentType:req.headers['content-type'],channel:gspayChannel,readBody:()=>bodyOf(req)});
+ }
+ if(url.pathname==='/api/v1/payments/gspay/config'){
+  if(req.method!=='GET')return json({error:'Method not allowed'},405);
+  const user=await withStorage(()=>sessionUser(req.headers.cookie));
+  return gspayRuntime.status(user,url.searchParams.get('tenant'));
+ }
  const bankReceipt=url.pathname.match(/^\/api\/v1\/bank-deposits\/([^/]+)\/receipt$/);
  const bankReview=url.pathname.match(/^\/api\/v1\/bank-deposits\/([^/]+)\/review$/);
  if(url.pathname==='/api/v1/bank-transfer/config'||url.pathname==='/api/v1/bank-deposits'||url.pathname==='/api/v1/finance-staff'||url.pathname==='/api/v1/finance-metrics'||bankReceipt||bankReview){
@@ -321,7 +349,7 @@ async function handle(req){const url=new URL(req.url,origin);const user=(await s
  }
  return new Response('Not found',{status:404});
 }
-export const server=createServer(async(req,res)=>{let response;try{if(req.method==='POST')req.portalBody=await bodyOf(req);response=await dispatch(req)}catch(e){console.error('Request failed:',e.message==='TOO_LARGE'?'body too large':'internal error');response=json({error:e.message==='TOO_LARGE'?'请求内容过长':'服务暂时无法处理，请稍后重试。'},e.message==='TOO_LARGE'?413:500)}
+export const server=createServer(async(req,res)=>{let response;try{const pathname=new URL(req.url,origin).pathname;if(req.method==='POST'&&!gspayCallbackPaths.has(pathname)&&!unavailableGspayPublicPaths.has(pathname))req.portalBody=await bodyOf(req);response=await dispatch(req)}catch(e){console.error('Request failed:',e.message==='TOO_LARGE'?'body too large':'internal error');response=json({error:e.message==='TOO_LARGE'?'请求内容过长':'服务暂时无法处理，请稍后重试。'},e.message==='TOO_LARGE'?413:500)}
  // Native same-origin form POSTs must retain Origin for the strict source check above.
  const headers={'cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'same-origin','x-frame-options':'DENY','content-security-policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; frame-ancestors 'none'; form-action 'self'; base-uri 'none'; connect-src 'self'"};if(origin.protocol==='https:')headers['strict-transport-security']='max-age=31536000';response.headers.forEach((v,k)=>headers[k]=v);res.writeHead(response.status,headers);res.end(Buffer.from(await response.arrayBuffer()));});
 server.requestTimeout=30000;server.headersTimeout=15000;
