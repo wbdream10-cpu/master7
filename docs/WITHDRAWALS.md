@@ -18,10 +18,12 @@
 - `0008_manual_withdrawals.sql` 分开保存申请、余额冻结、负数提现账本及财务动作。
 - PostgreSQL 表位于私有 schema，启用 RLS，并撤销公开及浏览器角色的直接访问。
 - 会员只读本人记录；总部和租户老板只管理已选择租户；财务员工须先获明确授权。
+- 后台列表把 `pending_review`、`processing` 固定排在已完成记录之前，并支持状态、会员、最多 31 天的 MYT 日期筛选及绑定筛选条件的稳定游标。未指定日期时覆盖全部历史，旧待办不会因新记录增加而被隐藏。
 - `GET /api/v1/wallet` 保留兼容字段 `balanceMinor`，并返回 `postedBalanceMinor`、`heldMinor`、`availableMinor`。正式余额为已核验充值减已付款提现；可用余额再减活动冻结。
 - 今日提现金额按 `Asia/Kuching` 当日的 `paid_at` 计算；申请、开始处理或失败不会计入已付款总额。
-- 导出最多 10000 条，并对可能触发表格公式的字段加保护；导出本身留下审计。
+- 导出默认最近 31 个 MYT 日期，可按状态、会员及成对日期缩小范围；最多 10000 条，并对可能触发表格公式的字段加保护，导出本身留下审计。
 - 银行资料会出现在受权限控制的财务页面和导出中，因此只能由实际业务所需人员访问。
+- 统一净额视图只读取已提交钱包账本，不导入银行或厂家结算单；详见 [财务队列与统一对账](FINANCE.md)。
 
 ## 配置与验证
 
@@ -31,6 +33,7 @@
 npm run test:withdrawals
 npm run test:wallet
 npm run test:bank-deposits
+npm run test:finance-reconciliation
 npm run test:migrations
 ```
 
