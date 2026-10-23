@@ -79,7 +79,8 @@ try{
  assert.deepEqual({balance:walletPaid.balanceMinor,posted:walletPaid.postedBalanceMinor,held:walletPaid.heldMinor,available:walletPaid.availableMinor},{balance:'4000',posted:'4000',held:'0',available:'4000'});
  const metrics=await (await call('/api/v1/finance-metrics',{headers:{Cookie:cookies.finance}})).json();assert.deepEqual(metrics.withdrawals,{enabled:true,count:1,amountMinor:'6000'});
  assert.equal((await call('/api/v1/withdrawals/export',{headers:{Cookie:cookies.member}})).status,403);
- const exported=await call('/api/v1/withdrawals/export?tenant=alpha&status=paid&member=member&from='+todayMYT+'&to='+todayMYT,{headers:{Cookie:cookies.owner}});assert.equal(exported.status,200);assert.match(exported.headers.get('content-disposition'),/master7-withdrawals\.csv/);const csv=await exported.text();assert(csv.includes(created.id));assert(csv.includes('HTTP-PAYOUT-001'));
+ assert.equal((await call('/api/v1/withdrawals/export?tenant=alpha&from='+todayMYT,{headers:{Cookie:cookies.owner}})).status,400);
+ const exported=await call('/api/v1/withdrawals/export?tenant=alpha&status=paid&member=member&from='+todayMYT+'&to='+todayMYT,{headers:{Cookie:cookies.owner}});assert.equal(exported.status,200);assert.match(exported.headers.get('content-disposition'),/master7-withdrawals\.csv/);assert.equal(exported.headers.get('x-content-type-options'),'nosniff');const csv=await exported.text();assert(csv.includes(created.id));assert(csv.includes('HTTP-PAYOUT-001'));
  console.log('PASS: local withdrawal HTTP routes enforce authentication, same-origin mutation, tenant and finance permissions, atomic holds, single posted debit, wallet fields, MYT paid metrics and audited CSV. Synthetic data only; no bank or provider requests.');
 }finally{
  globalThis.fetch=nativeFetch;await new Promise(resolve=>server.close(resolve));await sql.close();rmSync(directory,{recursive:true,force:true});

@@ -46,7 +46,7 @@ async function canonicalScope(user,selected){
 function emptyChannels(){
  return Object.fromEntries(providers.map(provider=>[provider,{count:0,amountMinor:'0'}]));
 }
-function summaryResponse(scope,dates,depositRows,withdrawalRow,mismatchRows){
+function summaryResponse(scope,dates,depositRows,withdrawalRow,mismatchRows,asOf){
  const channels=emptyChannels();
  for(const row of depositRows){
   if(!Object.hasOwn(channels,row.provider))continue;
@@ -57,7 +57,7 @@ function summaryResponse(scope,dates,depositRows,withdrawalRow,mismatchRows){
  const withdrawalCount=Number(withdrawalRow.count),withdrawalMinor=BigInt(withdrawalRow.amount_minor);
  const depositMismatches=Number(mismatchRows.deposit_mismatches),withdrawalMismatches=Number(mismatchRows.withdrawal_mismatches);
  return {
-  tenantId:scope.tenantId,environment:'production',currency:'MYR',range:dates,
+  tenantId:scope.tenantId,environment:'production',currency:'MYR',range:dates,asOf,
   deposits:{count:depositCount,amountMinor:depositMinor.toString(),channels},
   withdrawals:{count:withdrawalCount,amountMinor:withdrawalMinor.toString()},
   netMovementMinor:(depositMinor-withdrawalMinor).toString(),
@@ -69,30 +69,43 @@ function summaryResponse(scope,dates,depositRows,withdrawalRow,mismatchRows){
 export function createFinanceReconciliation({now=()=>new Date()}={}){
  const currentTime=()=>{const value=now();if(!(value instanceof Date)||!Number.isFinite(value.getTime()))throw new TypeError('Invalid finance reconciliation clock');return value;};
 
- async function readSummary(scope,dates){
-  const values=[scope.tenantId,dates.from,dates.to];
-  const [depositRows,withdrawalRow,depositMismatch,withdrawalMismatch]=await Promise.all([
-   sql.prepare(`SELECT o.provider,count(*) AS count,CAST(COALESCE(SUM(j.member_minor),0) AS TEXT) AS amount_minor
-    FROM portal_wallet_journal j JOIN portal_payment_orders o ON o.id=j.order_id
+ async function readSummary(scope,dates,asOf){
+  // One statement gives every card the same database snapshot even while
+  // another worker is posting a verified credit or paid withdrawal.
+  const row=await sql.prepare(`WITH deposit_rows AS (
+    SELECT o.provider,j.member_minor,j.clearing_minor,
+     CASE WHEN o.id IS NULL OR o.tenant_id<>j.tenant_id OR o.user_id<>j.user_id OR o.environment<>j.environment OR o.currency<>j.currency OR o.settlement_status<>'credited' OR o.amount_minor<>j.member_minor OR j.member_minor+j.clearing_minor<>0 THEN 1 ELSE 0 END AS mismatch
+    FROM portal_wallet_journal j LEFT JOIN portal_payment_orders o ON o.id=j.order_id
     WHERE j.tenant_id=? AND j.environment='production' AND j.currency='MYR' AND j.created_at>=? AND j.created_at<?
-    GROUP BY o.provider`).all(...values),
-   sql.prepare(`SELECT count(*) AS count,CAST(COALESCE(SUM(-j.member_minor),0) AS TEXT) AS amount_minor
-    FROM portal_wallet_withdrawal_journal j WHERE j.tenant_id=? AND j.environment='production' AND j.currency='MYR' AND j.created_at>=? AND j.created_at<?`).get(...values),
-   sql.prepare(`SELECT count(*) AS count FROM portal_wallet_journal j LEFT JOIN portal_payment_orders o ON o.id=j.order_id
+   ), deposit_summary AS (
+    SELECT
+     COALESCE(SUM(CASE WHEN provider='vpay' THEN 1 ELSE 0 END),0) AS vpay_count,CAST(COALESCE(SUM(CASE WHEN provider='vpay' THEN member_minor ELSE 0 END),0) AS TEXT) AS vpay_amount,
+     COALESCE(SUM(CASE WHEN provider='gspay_myr' THEN 1 ELSE 0 END),0) AS gspay_count,CAST(COALESCE(SUM(CASE WHEN provider='gspay_myr' THEN member_minor ELSE 0 END),0) AS TEXT) AS gspay_amount,
+     COALESCE(SUM(CASE WHEN provider='bank_transfer' THEN 1 ELSE 0 END),0) AS bank_count,CAST(COALESCE(SUM(CASE WHEN provider='bank_transfer' THEN member_minor ELSE 0 END),0) AS TEXT) AS bank_amount,
+     COALESCE(SUM(CASE WHEN provider='unknown' THEN 1 ELSE 0 END),0) AS unknown_count,CAST(COALESCE(SUM(CASE WHEN provider='unknown' THEN member_minor ELSE 0 END),0) AS TEXT) AS unknown_amount,
+     COALESCE(SUM(mismatch),0) AS deposit_mismatches FROM deposit_rows
+   ), withdrawal_rows AS (
+    SELECT j.member_minor,j.clearing_minor,
+     CASE WHEN w.id IS NULL OR w.tenant_id<>j.tenant_id OR w.user_id<>j.user_id OR w.environment<>j.environment OR w.currency<>j.currency OR w.status<>'paid' OR w.amount_minor<>-j.member_minor OR j.member_minor+j.clearing_minor<>0 THEN 1 ELSE 0 END AS mismatch
+    FROM portal_wallet_withdrawal_journal j LEFT JOIN portal_withdrawal_requests w ON w.id=j.withdrawal_id
     WHERE j.tenant_id=? AND j.environment='production' AND j.currency='MYR' AND j.created_at>=? AND j.created_at<?
-    AND (o.id IS NULL OR o.tenant_id<>j.tenant_id OR o.user_id<>j.user_id OR o.environment<>j.environment OR o.currency<>j.currency OR o.settlement_status<>'credited' OR o.amount_minor<>j.member_minor OR j.member_minor+j.clearing_minor<>0)`).get(...values),
-   sql.prepare(`SELECT count(*) AS count FROM portal_wallet_withdrawal_journal j LEFT JOIN portal_withdrawal_requests w ON w.id=j.withdrawal_id
-    WHERE j.tenant_id=? AND j.environment='production' AND j.currency='MYR' AND j.created_at>=? AND j.created_at<?
-    AND (w.id IS NULL OR w.tenant_id<>j.tenant_id OR w.user_id<>j.user_id OR w.environment<>j.environment OR w.currency<>j.currency OR w.status<>'paid' OR w.amount_minor<>-j.member_minor OR j.member_minor+j.clearing_minor<>0)`).get(...values),
-  ]);
-  return summaryResponse(scope,dates,depositRows,withdrawalRow,{deposit_mismatches:depositMismatch.count,withdrawal_mismatches:withdrawalMismatch.count});
+   ), withdrawal_summary AS (
+    SELECT count(*) AS withdrawal_count,CAST(COALESCE(SUM(-member_minor),0) AS TEXT) AS withdrawal_amount,COALESCE(SUM(mismatch),0) AS withdrawal_mismatches FROM withdrawal_rows
+   ) SELECT * FROM deposit_summary CROSS JOIN withdrawal_summary`).get(scope.tenantId,dates.from,dates.to,scope.tenantId,dates.from,dates.to);
+  const depositRows=[
+   {provider:'vpay',count:row.vpay_count,amount_minor:row.vpay_amount},
+   {provider:'gspay_myr',count:row.gspay_count,amount_minor:row.gspay_amount},
+   {provider:'bank_transfer',count:row.bank_count,amount_minor:row.bank_amount},
+   {provider:'unknown',count:row.unknown_count,amount_minor:row.unknown_amount},
+  ];
+  return summaryResponse(scope,dates,depositRows,{count:row.withdrawal_count,amount_minor:row.withdrawal_amount},{deposit_mismatches:row.deposit_mismatches,withdrawal_mismatches:row.withdrawal_mismatches},asOf);
  }
 
  async function getSummary(user,params){return withStorage(async()=>{
   if(!(params instanceof URLSearchParams))return json({error:'查询参数无效'},400);
   const scope=await canonicalScope(user,params.get('tenant'));if(scope.error)return scope.error;
-  const dates=range(params,currentTime());if(!dates)return json({error:'日期无效；最多选择连续 31 天（Asia/Kuching）'},400);
-  return json(await readSummary(scope,dates));
+  const instant=currentTime(),dates=range(params,instant);if(!dates)return json({error:'日期无效；最多选择连续 31 天（Asia/Kuching）'},400);
+  return json(await readSummary(scope,dates,instant.toISOString()));
  });}
 
  async function exportRecords(user,params){return withStorage(async()=>{

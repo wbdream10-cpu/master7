@@ -86,6 +86,7 @@ const cleanParams=params=>params instanceof URLSearchParams?params:new URLSearch
 
 function queryFilters(params,instant,{allowCursor=true,defaultRange=false}={}){
  const values=cleanParams(params),today=localDate(instant),providedFrom=values.get('from'),providedTo=values.get('to');
+ if(Boolean(providedFrom)!==Boolean(providedTo))return {error:'日期无效；请同时选择开始与结束日期，最多 31 天（Asia/Kuching）'};
  const fromLocal=providedFrom||(defaultRange?shiftDate(today,-30):null),toLocal=providedTo||(defaultRange?today:null);
  const status=values.get('status')||'all',member=(values.get('member')||'').trim().toLowerCase(),cursor=values.get('cursor')||'';
  if(Boolean(fromLocal)!==Boolean(toLocal)||(fromLocal&&(!validDate(fromLocal)||!validDate(toLocal)||toLocal<fromLocal||Date.parse(toLocal)-Date.parse(fromLocal)>30*86400000)))return {error:'日期无效；请同时选择开始与结束日期，最多 31 天（Asia/Kuching）'};
@@ -269,7 +270,7 @@ export function createWithdrawals({env=process.env,now=()=>new Date(),rateLimit=
   await sql.prepare('INSERT INTO audit(id,tenant_id,actor,action,created_at) VALUES (?,?,?,?,?)').run(randomUUID(),scope.tenantId,scope.identity.email,'导出人工提现记录：'+filters.fromLocal+' 至 '+filters.toLocal+' / '+filters.status+' / '+(filters.member||'全部会员')+' / '+rows.length+' 条',at);
   const headers=['提现编号','会员','金额（分）','币种','银行','户口名字','户口号码','状态','银行参考号','处理原因','提交时间（UTC）','开始处理时间（UTC）','完成时间（UTC）'];
   const lines=rows.map(publicWithdrawal).map(item=>[item.id,item.member,item.amountMinor,item.currency,item.bank.bankName,item.bank.accountHolder,item.bank.accountNumber,item.status,item.reference,item.reason,item.createdAt,item.processingAt,item.completedAt].map(csvCell).join(','));
-  return new Response('\ufeff'+[headers.map(csvCell).join(','),...lines].join('\r\n'),{headers:{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="master7-withdrawals.csv"','Cache-Control':'no-store'}});
+  return new Response('\ufeff'+[headers.map(csvCell).join(','),...lines].join('\r\n'),{headers:{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="master7-withdrawals.csv"','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
  });}
 
  return {configuration,list,submit,review,exportRecords};

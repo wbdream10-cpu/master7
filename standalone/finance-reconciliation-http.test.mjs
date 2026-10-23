@@ -54,6 +54,7 @@ try{
  assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-store');
  const result=await response.json();
  assert.deepEqual({tenantId:result.tenantId,deposits:result.deposits.amountMinor,withdrawals:result.withdrawals.amountMinor,net:result.netMovementMinor},{tenantId:'alpha',deposits:'15000',withdrawals:'4000',net:'11000'});
+ assert.match(result.asOf,/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
  assert.deepEqual(result.deposits.channels.vpay,{count:1,amountMinor:'12000'});
  assert.deepEqual(result.deposits.channels.bank_transfer,{count:1,amountMinor:'3000'});
  assert.equal(result.consistency.depositLedgerConsistent,true);assert.equal(result.consistency.withdrawalLedgerConsistent,true);
