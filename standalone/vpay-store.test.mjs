@@ -173,6 +173,8 @@ test('an expired query worker is fenced and a new lease recovers the order', asy
   await service.store.recordCallback(order.id, callback(order));
   const stale = (await service.store.claimQuery(order.id, { attemptedAt: fixedTime })).order;
   clock = new Date('2026-10-24T00:00:11.000Z');
+  assert((await service.store.listRecoveryCandidates()).some(item => item.id === order.id),
+    'an expired in-flight lease must return to the recovery queue');
   const fresh = await service.store.claimQuery(order.id, { attemptedAt: clock.toISOString() });
   assert.equal(fresh.claimed, true);
   assert.notEqual(fresh.order.queryAttemptId, stale.queryAttemptId);
@@ -196,11 +198,15 @@ test('pending orders with a known provider reference are recoverable without a c
   const claim = await service.store.claimQuery(order.id, { attemptedAt: fixedTime });
   assert.equal(claim.claimed, true);
   assert.equal(claim.order.callbackId, null);
+  // A paid callback can arrive after the recovery worker owns its query lease.
+  // The eventual atomic commit must close that callback instead of leaving it pending forever.
+  await service.store.recordCallback(order.id, callback(order));
   const done = await service.settlement.commitConfirmed({
     orderId: order.id, attemptId: claim.order.queryAttemptId, claimToken: claim.order.queryClaimToken,
     confirmation: confirmation(order), committedAt: fixedTime,
   });
   assert.equal(done.credited, true);
+  assert.equal((await one('portal_vpay_callbacks', 'order_id=?', [order.id])).processing_state, 'processed');
 
   const unknown = await reserve(service, members.bob);
   await service.store.claimCreate(unknown.order.id, { fingerprint: unknown.intent.fingerprint, attemptedAt: fixedTime });

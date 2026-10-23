@@ -419,16 +419,17 @@ export function createVPayStore({
     async listRecoveryCandidates({ limit = 25 } = {}) {
       if (!Number.isInteger(limit) || limit < 1 || limit > 100) fail('VPAY_QUERY_STATE_CONFLICT');
       return withStorage(async () => {
-        const cutoff = new Date(instant(now).getTime() - recoveryDelayMs).toISOString();
+        const current = instant(now), cutoff = new Date(current.getTime() - recoveryDelayMs).toISOString();
         const rows = await sql.prepare(`SELECT o.* FROM portal_payment_orders o
           WHERE o.provider='vpay' AND o.merchant_id=? AND o.environment=? AND o.review_required=0
           AND o.settlement_status IN ('created','pending') AND o.create_outcome IN ('in_flight','unknown','created')
           AND o.trade_no IS NOT NULL AND NOT EXISTS(
-            SELECT 1 FROM portal_vpay_attempts a WHERE a.order_id=o.id AND a.operation='query' AND a.outcome='in_flight'
+            SELECT 1 FROM portal_vpay_attempts a WHERE a.order_id=o.id AND a.operation='query'
+            AND a.outcome='in_flight' AND a.lease_expires_at>?
           ) AND NOT EXISTS(
             SELECT 1 FROM portal_vpay_attempts a WHERE a.order_id=o.id AND a.operation='query'
-            AND COALESCE(a.completed_at,a.started_at)>=?
-          ) ORDER BY o.created_at ASC,o.id ASC LIMIT ?`).all(merchantId, environment, cutoff, limit);
+            AND a.outcome<>'in_flight' AND COALESCE(a.completed_at,a.started_at)>=?
+          ) ORDER BY o.created_at ASC,o.id ASC LIMIT ?`).all(merchantId, environment, current.toISOString(), cutoff, limit);
         return Promise.all(rows.map(row => project(row, null)));
       });
     },
@@ -505,13 +506,13 @@ export function createVPayStore({
           attempt.id, orderId, claimToken, committedAt,
         );
         if (completed.changes !== 1) fail('VPAY_QUERY_LEASE_LOST');
-        if (callback) {
-          const callbacks = await sql.prepare(`UPDATE portal_vpay_callbacks SET processing_state='processed',processed_at=?
-            WHERE order_id=? AND provider_trade_no=? AND amount_minor=? AND processing_state='pending_query'`).run(
-            committedAt, orderId, confirmation.tradeNo, Number(row.amount_minor),
-          );
-          if (callbacks.changes < 1) fail('VPAY_SETTLEMENT_CONFLICT');
-        }
+        // Close every matching paid callback, including one that arrived after
+        // a recovery worker claimed an order without a callback attached.
+        const callbacks = await sql.prepare(`UPDATE portal_vpay_callbacks SET processing_state='processed',processed_at=?
+          WHERE order_id=? AND provider_trade_no=? AND amount_minor=? AND processing_state='pending_query'`).run(
+          committedAt, orderId, confirmation.tradeNo, Number(row.amount_minor),
+        );
+        if (attempt.callback_id && callbacks.changes < 1) fail('VPAY_SETTLEMENT_CONFLICT');
         if (row.create_outcome === 'in_flight') {
           await sql.prepare(`UPDATE portal_vpay_attempts SET outcome='succeeded',
             result_code='CREATE_RECOVERED_BY_QUERY',completed_at=?

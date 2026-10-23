@@ -29,7 +29,7 @@ if(storageKind==='sqlite'){
  pool.on('error',()=>console.error('Database connection failed.'));
 }
 // Application-owned SQL only; bind values separately, preserving quoted question marks.
-const tables=new Set(['schema_versions','audit','notices','tickets','brands','members','portal_users','portal_sessions','portal_rate_limits','portal_staff','portal_connections','portal_events','portal_deposit_requests','portal_payment_orders','portal_wallet_journal','portal_payment_reviews','portal_bank_accounts','portal_finance_staff','portal_bank_deposits','portal_withdrawal_requests','portal_wallet_holds','portal_wallet_withdrawal_journal','portal_withdrawal_actions','portal_gspay_callbacks','portal_gspay_attempts']);
+const tables=new Set(['schema_versions','audit','notices','tickets','brands','members','portal_users','portal_sessions','portal_rate_limits','portal_staff','portal_connections','portal_events','portal_deposit_requests','portal_payment_orders','portal_wallet_journal','portal_payment_reviews','portal_bank_accounts','portal_finance_staff','portal_bank_deposits','portal_withdrawal_requests','portal_wallet_holds','portal_wallet_withdrawal_journal','portal_withdrawal_actions','portal_gspay_callbacks','portal_gspay_attempts','portal_vpay_callbacks','portal_vpay_attempts']);
 export function postgresQuery(source){
  let index=0;
  source=source.replace(/on conflict\s*\(([^)]*)\)/gi,(_,columns)=>'on conflict ('+columns.replace(/(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)\.(?=")/g,'')+')');

@@ -7,15 +7,18 @@ import {tmpdir} from 'node:os';
 // Synthetic SQLite and injected functions only. A network call is always a
 // test failure; no supplier, gateway, Render, or production database is used.
 delete process.env.PORTAL_POSTGRES_URL;
-delete process.env.PORTAL_TEST_POSTGRES;
 delete process.env.RENDER;
 process.env.NODE_ENV='test';
 const directory=mkdtempSync(join(tmpdir(),'master7-vpay-recovery-'));
 process.env.PORTAL_DATABASE=join(directory,'recovery.sqlite');
+const postgres=process.argv.includes('--postgres');
+if(postgres){process.env.PORTAL_TEST_POSTGRES='1';process.env.PORTAL_TEST_POSTGRES_PATH=join(directory,'postgres');}
+else delete process.env.PORTAL_TEST_POSTGRES;
 globalThis.fetch=()=>{throw Error('Unexpected network access in VPay recovery test');};
 
 const {sql,withStorage}=await import('./runtime.mjs');
 const {createVPaySettlement,startVPayRecovery}=await import('./wallet.mjs');
+const {createVPayStore}=await import('./vpay-store.mjs');
 const fixed='2026-10-24T02:00:00.000Z';
 const user={userId:'recovery_member',email:'recovery@example.test',role:'customer',tenantId:'alpha'};
 await withStorage(async()=>{
@@ -61,6 +64,22 @@ test('an opted-in pass independently queries a known provider order and credits 
  const journal=await withStorage(()=>sql.prepare('SELECT count(*) AS count FROM portal_wallet_journal WHERE order_id=?').get(order.id));
  assert.equal(row.settlement_status,'credited');assert.equal(Number(journal.count),1);
  assert.deepEqual(await settlement.recoverPending({limit:5}),{enabled:true,processed:0,credited:0});assert.equal(queries,1);
+});
+
+test('the worker reclaims an expired query lease left by a crashed process',async()=>{
+ let clock=new Date(fixed),queries=0;
+ const settlement=createVPaySettlement({env:baseEnv,now:()=>new Date(clock),verifyOrder:async order=>{
+  queries++;return {code:0,data:{out_trade_no:order.id,trade_no:order.trade_no,amount:'10.00',state:'3'}};
+ }});
+ const order=await knownOrder(settlement);
+ const crashed=createVPayStore({merchantId:'3647',environment:'uat',now:()=>new Date(clock),queryLeaseMs:60_000,recoveryDelayMs:60_000});
+ const stale=await crashed.store.claimQuery(order.id,{attemptedAt:clock.toISOString()});assert.equal(stale.claimed,true);
+ assert.deepEqual(await settlement.recoverPending({limit:5}),{enabled:true,processed:0,credited:0});
+ clock=new Date(clock.getTime()+61_000);
+ assert.deepEqual(await settlement.recoverPending({limit:5}),{enabled:true,processed:1,credited:1});assert.equal(queries,1);
+ const attempts=await withStorage(()=>sql.prepare("SELECT outcome,result_code FROM portal_vpay_attempts WHERE order_id=? AND operation='query' ORDER BY started_at,id").all(order.id));
+ assert(attempts.some(row=>row.outcome==='unknown'&&row.result_code==='VPAY_QUERY_LEASE_EXPIRED'));
+ assert(attempts.some(row=>row.outcome==='succeeded'&&row.result_code==='QUERY_CONFIRMED'));
 });
 
 test('an uncertain create without a provider trade number is never queried or resent',async()=>{

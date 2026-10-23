@@ -10,7 +10,7 @@ import {listConnections,configureConnection,receiveEvent,listEvents} from './con
 import {getDepositRequests,createDepositRequest} from './deposit.mjs';
 import {createPaymentChannelsHandler} from './payment-channels.mjs';
 import {createGSPayRuntime} from './gspay-runtime.mjs';
-import {createVPaySettlement,getWallet,getPaymentRecords} from './wallet.mjs';
+import {createVPaySettlement,startVPayRecovery,getWallet,getPaymentRecords} from './wallet.mjs';
 import {createVPayCheckout} from './vpay-checkout.mjs';
 import {createSponsoredGamesHandler} from './sponsored-games.mjs';
 import {BankReceiptUploadError,createBankDeposits,readBankReceiptBody} from './bank-deposits.mjs';
@@ -86,6 +86,7 @@ const unavailableGspayPublicPaths=new Set([
  '/api/v1/payment-callbacks/gspay/usdt',
 ]);
 const vpaySettlement=createVPaySettlement();
+startVPayRecovery(vpaySettlement);
 const vpayCheckout=createVPayCheckout({settlement:vpaySettlement});
 const sponsoredGames=createSponsoredGamesHandler({
  getMemberTenant:email=>withStorage(async()=>{const member=await sql.prepare('SELECT tenant_id FROM members WHERE email=?').get(email);return member?.tenant_id||null;}),
