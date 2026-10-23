@@ -13,7 +13,7 @@
     "test:postgres": "node standalone/test.mjs --postgres",
     "test:migrations": "node standalone/brand-migration.test.mjs",
     "test:storage": "node standalone/storage-config.test.mjs",
-    "test:payments": "node standalone/payment-channels.test.mjs"
+    "test:payments": "node standalone/payment-channels.test.mjs && node standalone/vpay-contract.test.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

@@ -56,6 +56,8 @@ unset portal_password
 
 Deposit 页提供 VPay、GSPAY+ MYR、GSPAY+ USDT 三个通道入口，目前均显示未开放且不可付款。服务端只读查询固定 VPay 网关状态，总部后台可查看脱敏的检查结果；配置资料存在或网关报告就绪均不会自动开启本平台结算。普通会员不接收诊断详情，USDT 保持停止新订单。详见 [Deposit 申请说明](docs/DEPOSIT.md)。
 
+VPay 的独立离线契约模块提供 MYR 精确金额、未签名建单资料及供应商返回字段校验；不导入数据库、不发送网络请求、不读取密钥，也未接入服务路由。解析到供应商的“已付款”状态仍返回 `authenticated:false` 与 `fundsProcessed:false`，不能据此入账。实现范围及真实联调前提见 [VPay 接入准备](docs/VPAY.md)。
+
 ## 接手人员
 
 阅读 [通用接口说明](docs/INTEGRATION.md) 和 [Deposit 申请说明](docs/DEPOSIT.md)。事件接收采用独立密钥、签名、时间窗口、重复事件校验，并存储到配置所属工作空间；默认未配置任何外部服务。`202 accepted` 只表示接收，`processed:false` 明确表示尚未处理，不会产生任何资金、余额或业务状态变化。
