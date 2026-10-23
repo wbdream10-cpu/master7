@@ -70,7 +70,9 @@ unset portal_password
 
 人工提现同样默认关闭。启用后，会员提交 MYR 金额与本人收款银行资料，平台在原子余额检查后冻结可用额；财务可以开始处理、拒绝、登记人工付款或标记失败。只有登记为已付款的申请才写入一次负数钱包账本并进入今日提现总额，拒绝或失败会释放冻结。模块不会登录银行、调用 GSPAY Payout 或自动转账；关闭新申请开关也不会阻止财务处理已有冻结。接口、状态机、权限、CSV 与验证范围见 [人工提现与财务审核](docs/WITHDRAWALS.md)。
 
-Deposit 页新增独立 VPay 建单表单，默认关闭；GSPAY+ MYR 与 USDT 保留未开放的入口，USDT 不接收新订单。服务端只读查询固定 VPay 网关状态，总部后台可查看脱敏的检查结果；配置资料存在或网关报告就绪均不会自动开启本平台结算。GSPAY+ MYR 已加入不联网的签名、查单/回调验签及 DuitNow 状态校验，并提供登录后、按租户隔离的固定关闭状态接口。两个“集成网关 → 门户”的内部 Payment/DuitNow 机器入口只接受独立 Bearer token 与最多 16 KiB 的 JSON object；即使凭据和正文有效也固定返回 503 `GSPAY_SETTLEMENT_DISABLED`，不查厂家、不保存回调、不写订单/审计/钱包、不返回成功确认。厂家截图中的公开路径、建单、USDT 与 Payout 均未实现。普通会员不接收秘密或诊断详情，USDT 保持停止新订单。详见 [Deposit 申请说明](docs/DEPOSIT.md)及 [GSPAY+ MYR 接入准备](docs/GSPAY.md)。
+Deposit 页新增独立 VPay 建单表单，默认关闭；GSPAY+ MYR 与 USDT 保留未开放的入口，USDT 不接收新订单。服务端只读查询固定 VPay 网关状态，总部后台可查看脱敏的检查结果；配置资料存在或网关报告就绪均不会自动开启本平台结算。GSPAY+ MYR 已加入不联网的签名、查单/回调验签及 DuitNow 状态校验，并提供登录后、按租户隔离的固定关闭状态接口。两个“集成网关 → 门户”的内部 Payment/DuitNow 机器入口只接受独立 Bearer token 与最多 16 KiB 的 JSON object；即使凭据和正文有效也固定返回 503 `GSPAY_SETTLEMENT_DISABLED`，不查厂家、不保存回调、不写订单/审计/钱包、不返回成功确认。
+
+GSPAY+ MYR 另有一套尚未接入 HTTP 路由的内部契约骨架：`gspay-provider.mjs` 只允许门户通过固定 MASTER7 集成网关执行版本化查单，`gspay-checkout-core.mjs` 约束建单幂等、回调收件、独立查单和单事务结算能力。建单适配器仍在任何网络请求前固定返回 `GSPAY_CREATE_SCHEMA_UNCONFIRMED`，因为厂家资料没有给出成功响应的完整 JSON。迁移 `0009_gspay_myr_checkout.sql` 只建立空的脱敏回调/尝试表及厂家应付金额字段，不导入订单、不保存原始回调、签名、remark、auth key、secret 或银行资料。会员页面因此只显示四项接线状态，没有金额表单、厂家跳转或自动钱包入账。厂家截图中的公开路径、建单、USDT 与 Payout 均未开放，正式域名也没有因这些代码改变。普通会员不接收秘密或诊断详情，USDT 保持停止新订单。详见 [Deposit 申请说明](docs/DEPOSIT.md)及 [GSPAY+ MYR 接入准备](docs/GSPAY.md)。
 
 每笔平台充值订单另存明确来源 `vpay`、`gspay_myr`、`bank_transfer` 或 `unknown`。新增迁移把旧银行订单归为银行转账，其余已有平台订单归为 VPay；后续未指定来源的记录会进入“未识别渠道”单独核对，不会混进 VPay 金额。财务员工须经总部或租户老板单独授权，才可查看并导出本租户统一充值记录；普通员工不能查看。统一记录筛选按 Asia/Kuching 日期计算，CSV 时间戳仍标明 UTC。GSPAY+ MYR 的离线协议与固定 503 内部边界不会自动启用建单、公开厂家回调或入账。
 

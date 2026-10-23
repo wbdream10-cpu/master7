@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 
 export const GSPAY_CALLBACK_MAX_BYTES = 16 * 1024;
 export const GSPAY_SETTLEMENT_DISABLED = 'GSPAY_SETTLEMENT_DISABLED';
+export const GSPAY_CREATE_SCHEMA_UNCONFIRMED = 'GSPAY_CREATE_SCHEMA_UNCONFIRMED';
 
 const json = (data, status = 200) => Response.json(data, {
   status,
@@ -54,10 +55,12 @@ function statusBody(tenantId) {
     enabled: false,
     ordersEnabled: false,
     callbacksEnabled: false,
+    queryEnabled: false,
     settlementEnabled: false,
+    providerSchemaConfirmed: false,
     liveReady: false,
     mode: 'disabled',
-    blockers: [GSPAY_SETTLEMENT_DISABLED],
+    blockers: [GSPAY_CREATE_SCHEMA_UNCONFIRMED, GSPAY_SETTLEMENT_DISABLED],
   };
 }
 
