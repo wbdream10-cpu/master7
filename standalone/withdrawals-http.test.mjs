@@ -16,6 +16,7 @@ const {sql,withStorage}=await import('./runtime.mjs');
 const {newSession}=await import('./security.mjs');
 const {server}=await import('./server.mjs');
 const createdAt=new Date(Date.now()-60_000).toISOString();
+const todayMYT=new Date(Date.now()+8*3600000).toISOString().slice(0,10);
 
 await withStorage(async()=>{
  for(const id of ['alpha','beta'])await sql.prepare('INSERT INTO brands(id,name,created_at) VALUES (?,?,?)').run(id,id,createdAt);
@@ -63,11 +64,12 @@ try{
 
  const walletHeld=await (await call('/api/v1/wallet?environment=production',{headers:{Cookie:cookies.member}})).json();
  assert.deepEqual({balance:walletHeld.balanceMinor,posted:walletHeld.postedBalanceMinor,held:walletHeld.heldMinor,available:walletHeld.availableMinor},{balance:'10000',posted:'10000',held:'6000',available:'4000'});
- const memberList=await (await call('/api/v1/withdrawals',{headers:{Cookie:cookies.member}})).json();assert.equal(memberList.withdrawals.length,1);assert.equal(memberList.withdrawals[0].id,created.id);
+ const memberList=await (await call('/api/v1/withdrawals',{headers:{Cookie:cookies.member}})).json();assert.equal(memberList.withdrawals.length,1);assert.equal(memberList.withdrawals[0].id,created.id);assert.equal(memberList.nextCursor,null);assert.equal(memberList.filters.from,null);assert.equal(memberList.summary.statuses.pending_review.count,1);
  assert.equal((await call('/api/v1/withdrawals',{headers:{Cookie:cookies.other}})).status,200);
  assert.equal((await (await call('/api/v1/withdrawals',{headers:{Cookie:cookies.other}})).json()).withdrawals.length,0);
  assert.equal((await call('/api/v1/withdrawals',{headers:{Cookie:cookies.employee}})).status,403);
- assert.equal((await call('/api/v1/withdrawals',{headers:{Cookie:cookies.finance}})).status,200);
+ const filtered=await (await call('/api/v1/withdrawals?status=pending_review&member=member&from='+todayMYT+'&to='+todayMYT,{headers:{Cookie:cookies.finance}})).json();assert.equal(filtered.summary.count,1);assert.equal(filtered.withdrawals[0].id,created.id);assert.deepEqual({status:filtered.filters.status,member:filtered.filters.member,from:filtered.filters.from,to:filtered.filters.to},{status:'pending_review',member:'member',from:todayMYT,to:todayMYT});
+ for(const suffix of ['status=unknown','from='+todayMYT,'member=member%25','cursor=bad!'])assert.equal((await call('/api/v1/withdrawals?'+suffix,{headers:{Cookie:cookies.finance}})).status,400,suffix);
  assert.equal((await call('/api/v1/withdrawals/'+created.id+'/review',{method:'POST',headers:headers(cookies.employee),body:JSON.stringify({action:'reject',requestKey:'employee_review_request1',reason:'Not allowed'})})).status,403);
  assert.equal((await call('/api/v1/withdrawals/'+created.id+'/review?tenant=beta',{method:'POST',headers:headers(cookies['beta-boss']),body:JSON.stringify({action:'reject',requestKey:'beta_review_request_001',reason:'Wrong tenant'})})).status,404);
 
@@ -77,7 +79,7 @@ try{
  assert.deepEqual({balance:walletPaid.balanceMinor,posted:walletPaid.postedBalanceMinor,held:walletPaid.heldMinor,available:walletPaid.availableMinor},{balance:'4000',posted:'4000',held:'0',available:'4000'});
  const metrics=await (await call('/api/v1/finance-metrics',{headers:{Cookie:cookies.finance}})).json();assert.deepEqual(metrics.withdrawals,{enabled:true,count:1,amountMinor:'6000'});
  assert.equal((await call('/api/v1/withdrawals/export',{headers:{Cookie:cookies.member}})).status,403);
- const exported=await call('/api/v1/withdrawals/export?tenant=alpha',{headers:{Cookie:cookies.owner}});assert.equal(exported.status,200);assert.match(exported.headers.get('content-disposition'),/master7-withdrawals\.csv/);const csv=await exported.text();assert(csv.includes(created.id));assert(csv.includes('HTTP-PAYOUT-001'));
+ const exported=await call('/api/v1/withdrawals/export?tenant=alpha&status=paid&member=member&from='+todayMYT+'&to='+todayMYT,{headers:{Cookie:cookies.owner}});assert.equal(exported.status,200);assert.match(exported.headers.get('content-disposition'),/master7-withdrawals\.csv/);const csv=await exported.text();assert(csv.includes(created.id));assert(csv.includes('HTTP-PAYOUT-001'));
  console.log('PASS: local withdrawal HTTP routes enforce authentication, same-origin mutation, tenant and finance permissions, atomic holds, single posted debit, wallet fields, MYT paid metrics and audited CSV. Synthetic data only; no bank or provider requests.');
 }finally{
  globalThis.fetch=nativeFetch;await new Promise(resolve=>server.close(resolve));await sql.close();rmSync(directory,{recursive:true,force:true});
