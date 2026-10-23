@@ -84,6 +84,7 @@ test('responses match merchant, internal order, provider order and exact amount'
     errorCode(() => inspect(response({ amount: '100.01' }), expected), 'VPAY_AMOUNT_MISMATCH');
   }
   errorCode(() => inspectVPayQueryResult(response({ trade_no: 'different_external_order' }), expected), 'VPAY_ORDER_MISMATCH');
+  for (const inspect of [inspectVPayCreateResult, inspectVPayQueryResult]) errorCode(() => inspect(response({currency:'USD'}),expected),'VPAY_CURRENCY_MISMATCH');
   errorCode(() => inspectVPayQueryResult(response(), { ...expected, tradeNo: undefined }), 'VPAY_INVALID_ORDER_ID');
 });
 

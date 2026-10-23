@@ -98,6 +98,7 @@ function envelope(value) {
   return record(value.data);
 }
 function match(data, expected, { merchantRequired = false, tradeNoRequired = false } = {}) {
+  if (Object.hasOwn(data, 'currency') && data.currency !== expected.currency) fail('VPAY_CURRENCY_MISMATCH');
   if (merchantRequired || Object.hasOwn(data, 'trader_id')) {
     if (traderId(data.trader_id) !== expected.traderId) fail('VPAY_MERCHANT_MISMATCH');
   }

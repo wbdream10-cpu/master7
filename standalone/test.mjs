@@ -25,6 +25,9 @@ try{
  assert.equal((await req('/')).status,303);assert.equal((await req('/admin')).status,303);assert.equal((await get()).status,401);assert.equal((await req('/health')).status,200);
  assert.equal((await paymentChannels()).status,401);assert.equal(gatewayStatusReads,0);
  assert.equal((await req('/api/v1/payment-channels',{method:'POST'})).status,405);
+ for(const path of ['/api/v1/wallet','/api/v1/payment-records','/api/v1/payment-records/export'])assert.equal((await req(path)).status,401);
+ assert.equal((await req('/api/v1/payment-callbacks/vpay/payment')).status,405);
+ assert.equal((await req('/api/v1/payment-callbacks/vpay/payment',{method:'POST',headers:{'content-type':'application/json'},body:'{}'})).status,503);
  const health=await (await req('/health')).json();assert.equal(health.database,'ready');assert.equal(health.scope,'database_readiness');assert.equal(health.externalServices,false);
  assert.equal((await req('/signin')).headers.get('referrer-policy'),'same-origin');
  assert((await (await req('/signin')).text()).includes('src="/brand/master7-logo.jpg"'));
