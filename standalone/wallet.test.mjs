@@ -121,6 +121,23 @@ test('a member moved to another tenant is held for review instead of crediting t
  finally{await sql.prepare('UPDATE members SET tenant_id=? WHERE email=?').run('beta',bob.email);}
 });
 
+test('staff assignments block new VPay orders and hold pre-promotion orders without credit',async()=>{
+ const s=core(),charlie={userId:'charlie',email:'charlie@example.test',role:'customer',tenantId:'alpha'};
+ await sql.prepare('INSERT INTO portal_staff VALUES (?,?,?)').run(charlie.userId,'alpha','employee');
+ try{
+  await assert.rejects(s.reserveForMember(charlie,{amount:'12.34',currency:'MYR',requestKey:'staff_reserve_request_01'}),/MEMBER_UNAVAILABLE/);
+ }finally{await sql.prepare('DELETE FROM portal_staff WHERE user_id=?').run(charlie.userId);}
+
+ const order=await orderFor(s,alice),before=await count('portal_wallet_journal');
+ await sql.prepare('INSERT INTO portal_staff VALUES (?,?,?)').run(alice.userId,'alpha','employee');
+ try{
+  assert.equal((await s.receive(raw(order),auth)).status,503);
+  assert.equal(await count('portal_wallet_journal'),before);
+  assert.equal((await find(order.id)).review_required,1);
+  const review=await sql.prepare('SELECT reason FROM portal_payment_reviews WHERE order_id=?').get(order.id);assert.equal(review.reason,'VPAY_MEMBERSHIP_CHANGED');
+ }finally{await sql.prepare('DELETE FROM portal_staff WHERE user_id=?').run(alice.userId);}
+});
+
 test('a reversal after credit is visible for review and never silently deletes or debits history',async()=>{
  const s=core(),order=await orderFor(s);assert.equal((await s.receive(raw(order),auth)).status,200);
  const before=(await balance(alice)).balanceMinor;
@@ -146,7 +163,7 @@ test('CSV export is manager-only, complete for the selected period, safe for spr
  assert.equal((await s.receive(raw(order),auth)).status,200);
  const response=await withStorage(()=>getPaymentRecords(boss,params,{exportCSV:true}));assert.equal(response.status,200);assert(response.headers.get('content-type').startsWith('text/csv'));
  const csv=await response.text();assert(csv.includes(order.id));assert(csv.includes('"\'=imported-member"'));assert(!csv.includes('private-signature'));assert(!csv.includes('private-account'));
- const audits=await sql.prepare("SELECT count(*) AS n FROM audit WHERE action LIKE '导出 VPay%'").get();assert(Number(audits.n)>0);
+ const audits=await sql.prepare("SELECT count(*) AS n FROM audit WHERE action LIKE '导出充值核对记录%'").get();assert(Number(audits.n)>0);
 });
 
 test('record pagination has stable boundaries and period totals include every page',async()=>{

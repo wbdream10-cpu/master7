@@ -132,6 +132,7 @@ try{
   assert.equal((await form('/accounts/approve',{id:ids[username]},ownerCookie)).status,303);
  }
  for(const [name,role] of [['tenantboss','tenant_owner'],['staffmember','employee'],['tenantclient','customer']])assert.equal((await form('/accounts/role',{id:ids[name],tenantId:'alpha',role},ownerCookie)).status,303);
+ await sql.prepare('INSERT INTO portal_finance_staff(user_id,tenant_id,granted_by,granted_at) VALUES (?,?,?,?)').run(ids.staffmember,'alpha',(await sql.prepare("SELECT id FROM portal_users WHERE role='owner'").get()).id,new Date().toISOString());
  let bossLogin=await form('/auth/login',{username:'tenantboss',password});assert.equal(bossLogin.headers.get('location'),'/admin');const tenantBossCookie=session(bossLogin);
  const staffCookie=session(await form('/auth/login',{username:'staffmember',password}));
  const tenantClientCookie=session(await form('/auth/login',{username:'tenantclient',password}));
@@ -173,6 +174,7 @@ try{
  assert.equal((await post({action:'update-ticket',id:alphaTicket,status:'已完成',reply:'Handled by employee'},staffCookie)).status,200);
  assert.equal((await post({action:'update-ticket',id:ticketId,status:'已完成',reply:'No'},staffCookie)).status,404);
  assert.equal((await form('/accounts/role',{id:ids.staffmember,tenantId:'alpha',role:'customer'},ownerCookie)).status,303);
+ assert.equal(await sql.prepare('SELECT user_id FROM portal_finance_staff WHERE user_id=?').get(ids.staffmember),undefined);assert.equal(Number((await sql.prepare("SELECT count(*) AS n FROM audit WHERE action LIKE '职责变更撤销财务审核权限：%'").get()).n),1);
  assert.equal((await get(staffCookie)).status,401);
  const demoted=session(await form('/auth/login',{username:'staffmember',password}));assert.equal((await req('/admin',{headers:{cookie:demoted}})).status,403);
  assert.equal((await (await get(demoted)).json()).tickets.length,0);

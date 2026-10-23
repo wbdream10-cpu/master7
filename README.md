@@ -61,6 +61,10 @@ unset portal_password
 
 默认语言可选简体中文、English、Bahasa Melayu；当前功能只保存品牌语言偏好，现有页面文案仍为中文，尚未实现整站翻译。数据库新增迁移为旧品牌补上默认语言 `zh-CN` 与空客服地址，保留已有名称、欢迎语、主题色和 Logo；发布前仍需备份并在隔离环境验证真实数据库迁移。`test:migrations` 验证本地 SQLite/PGlite 旧结构升级及重启，不替代云端 PostgreSQL 验收。
 
+免费游戏大厅只读显示 MegaH5、JILI 与 918KISS 三个赞助商目录。`GET /api/v1/sponsored-games?provider=<megah5|jili|918kiss>` 需要平台登录，并继续执行租户隔离；接口只投影游戏编号、名称、分类、HTTPS 图片和维护状态，固定返回 `launchEnabled:false` 与 `walletUsed:false`，不提供游戏启动、供应商玩家、下注或钱包调用。`freeOnly` 与 `freeEligibilitySource:user_confirmed_sponsorship` 来自用户确认的三方赞助安排；它不代表厂家账号、免费启动或 GameLogin 已通过验收。部署方只能将 `PORTAL_GAMES_GATEWAY_URL` 设置为固定来源 `https://master7-integration-gateway.onrender.com`；若该网关要求机器认证，可另设 `PORTAL_GAMES_GATEWAY_TOKEN`。目录环境默认保守标为 `uat`，只有明确设置 `PORTAL_GAMES_GATEWAY_MODE=production` 才会显示生产目录。秘密不能写入前端、日志或仓库。网关未配置、来源不匹配、供应商账号未开通或目录读取失败时，页面显示等待同步或暂时不可用，不用历史快照或样位游戏冒充实时目录。
+
+银行转账充值默认关闭且不预置真实银行资料。总部或租户老板可保存银行名称、户口名字和户口号码并决定是否开放；会员提交金额、付款人、银行交易编号、转账时间及最大 2 MiB 的 JPEG、PNG 或 WebP 单据。单据保存在私有数据库表，没有公开文件地址，仅本人、同租户老板、总部及明确获授权的财务员工可读。财务批准前必须在银行后台核实实际到账，并提交所查看单据的 SHA-256；批准事务只写入一次订单和钱包账本。系统不收集银行登录 ID、密码、OTP 或 Authenticator 动态码。今日财务概览按 Asia/Kuching 分列 VPay、GSPAY+ MYR、银行转账、待审核、已入账、提现和新注册；未接通的 GSPAY+ MYR 与提现固定显示未开放和零数据。相关接口与回归测试集中在 `standalone/bank-deposits.mjs`、`standalone/bank-deposits.test.mjs` 和 `standalone/bank-deposits-http.test.mjs`。
+
 Deposit 页新增独立 VPay 建单表单，默认关闭；GSPAY+ MYR 与 USDT 保留未开放的入口，USDT 不接收新订单。服务端只读查询固定 VPay 网关状态，总部后台可查看脱敏的检查结果；配置资料存在或网关报告就绪均不会自动开启本平台结算。普通会员不接收诊断详情，USDT 保持停止新订单。详见 [Deposit 申请说明](docs/DEPOSIT.md)。
 
 VPay 的独立离线契约模块提供 MYR 精确金额、未签名建单资料及供应商返回字段校验；模块自身不导入数据库、不读取密钥、不发送请求或入账；本分支另有服务路由使用它校验付款字段。解析到供应商的“已付款”状态仍返回 `authenticated:false` 与 `fundsProcessed:false`，不能据此入账。实现范围及真实联调前提见 [VPay 接入准备](docs/VPAY.md)。

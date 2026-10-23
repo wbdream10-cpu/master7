@@ -45,7 +45,7 @@ export function createVPaySettlement({env=process.env,verifyOrder,now=()=>new Da
   const normalized=normalizeVPayMYR(amount);
   if(currency!=='MYR'||BigInt(normalized.amountMinor)>10000000n||typeof requestKey!=='string'||!/^[A-Za-z0-9_-]{16,100}$/.test(requestKey))throw Error('VPAY_INVALID_ORDER');
   return withStorage(async()=>{
-   const member=await sql.prepare("SELECT u.id,COALESCE(m.tenant_id,'main') AS tenant_id FROM portal_users u LEFT JOIN members m ON m.email=u.email WHERE u.id=? AND u.role='customer' AND u.approved=1").get(user?.userId||'');
+   const member=await sql.prepare("SELECT u.id,COALESCE(m.tenant_id,'main') AS tenant_id FROM portal_users u LEFT JOIN members m ON m.email=u.email LEFT JOIN portal_staff p ON p.user_id=u.id WHERE u.id=? AND u.role='customer' AND u.approved=1 AND p.user_id IS NULL").get(user?.userId||'');
    if(!member||user.role!=='customer'||(user.tenantId&&user.tenantId!==member.tenant_id))throw Error('VPAY_MEMBER_UNAVAILABLE');
    const id=randomUUID(),at=now().toISOString();
    await sql.prepare("INSERT INTO portal_payment_orders(id,tenant_id,user_id,request_key,merchant_id,environment,amount_minor,currency,settlement_status,created_at) VALUES (?,?,?,?,?,?,?,?,'created',?) ON CONFLICT(user_id,request_key) DO NOTHING").run(id,member.tenant_id,member.id,requestKey,trader,environment,Number(normalized.amountMinor),'MYR',at);
@@ -104,8 +104,8 @@ export function createVPaySettlement({env=process.env,verifyOrder,now=()=>new Da
   return withStorage(async()=>{
    const at=now().toISOString();await sql.exec('BEGIN IMMEDIATE');
    try{
-    const member=await sql.prepare("SELECT u.role,COALESCE(m.tenant_id,'main') AS tenant_id FROM portal_users u LEFT JOIN members m ON m.email=u.email WHERE u.id=?").get(order.user_id);
-    if(!member||member.role!=='customer'||member.tenant_id!==order.tenant_id){
+    const member=await sql.prepare("SELECT COALESCE(m.tenant_id,'main') AS tenant_id FROM portal_users u LEFT JOIN members m ON m.email=u.email LEFT JOIN portal_staff p ON p.user_id=u.id WHERE u.id=? AND u.role='customer' AND u.approved=1 AND p.user_id IS NULL").get(order.user_id);
+    if(!member||member.tenant_id!==order.tenant_id){
      await sql.exec('ROLLBACK');await review(order,'VPAY_MEMBERSHIP_CHANGED',{outTradeNo:order.id});
      return json({error:'VPAY_RECONCILIATION_REQUIRED'},503);
     }
@@ -151,7 +151,7 @@ function range(params){
  if(!valid(from)||!valid(to)||to<from||Date.parse(to)-Date.parse(from)>30*86400000)return null;
  return {from:from+'T00:00:00.000Z',to:new Date(Date.parse(to+'T00:00:00Z')+86400000).toISOString()};
 }
-const publicOrder=row=>({id:row.id,tenantId:row.tenant_id,member:row.username,provider:'vpay',providerOrderId:row.trade_no,environment:row.environment,currency:row.currency,amountMinor:String(row.amount_minor),creditedMinor:String(row.member_minor||0),status:row.settlement_status,creationStatus:row.create_outcome,reviewRequired:!!row.review_required,reviewCount:Number(row.review_count),createdAt:row.created_at,verifiedAt:row.verified_at,creditedAt:row.credited_at});
+const publicOrder=row=>({id:row.id,tenantId:row.tenant_id,member:row.username,provider:row.merchant_id==='manual_bank'?'bank_transfer':'vpay',providerOrderId:row.trade_no,environment:row.environment,currency:row.currency,amountMinor:String(row.amount_minor),creditedMinor:String(row.member_minor||0),status:row.settlement_status,creationStatus:row.create_outcome,reviewRequired:!!row.review_required,reviewCount:Number(row.review_count),createdAt:row.created_at,verifiedAt:row.verified_at,creditedAt:row.credited_at});
 const csvCell=value=>'"'+String(value??'').replace(/^[\u0000-\u0020]*[=+@\-]/,"'$&").replace(/"/g,'""')+'"';
 export async function getPaymentRecords(user,params,{exportCSV=false}={}){
  const s=await access(user,params.get('tenant'),exportCSV);if(s.error)return s.error;
@@ -173,14 +173,14 @@ export async function getPaymentRecords(user,params,{exportCSV=false}={}){
  const rows=await sql.prepare('SELECT o.*,u.username,j.member_minor,(SELECT count(*) FROM portal_payment_reviews r WHERE r.order_id=o.id) AS review_count FROM portal_payment_orders o JOIN portal_users u ON u.id=o.user_id LEFT JOIN portal_wallet_journal j ON j.order_id=o.id WHERE '+where+cursor+' ORDER BY o.created_at DESC,o.id DESC LIMIT '+limit).all(...values,...cursorValues);
  if(exportCSV){
   if(rows.length>10000)return json({error:'记录超过 10000 条，请缩短导出日期范围'},413);
-  await sql.prepare('INSERT INTO audit(id,tenant_id,actor,action,created_at) VALUES (?,?,?,?,?)').run(randomUUID(),s.tenant,user.email,'导出 VPay 充值核对记录：'+environment+' / '+dates.from+' / '+dates.to+' / '+rows.length+' 条',new Date().toISOString());
-  const headers=['平台订单号','会员','VPay订单号','环境','币种','充值金额（分）','入账金额（分）','状态','建单结果','需复核','创建时间（UTC）','核验时间（UTC）','入账时间（UTC）'];
-  const lines=rows.map(publicOrder).map(r=>[r.id,r.member,r.providerOrderId,r.environment,r.currency,r.amountMinor,r.creditedMinor,r.status,r.creationStatus,r.reviewRequired?'是':'否',r.createdAt,r.verifiedAt,r.creditedAt].map(csvCell).join(','));
-  return new Response('\ufeff'+[headers.map(csvCell).join(','),...lines].join('\r\n'),{headers:{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="master7-vpay-records.csv"'}});
+  await sql.prepare('INSERT INTO audit(id,tenant_id,actor,action,created_at) VALUES (?,?,?,?,?)').run(randomUUID(),s.tenant,user.email,'导出充值核对记录：'+environment+' / '+dates.from+' / '+dates.to+' / '+rows.length+' 条',new Date().toISOString());
+  const headers=['平台订单号','会员','充值通道','外部／核对编号','环境','币种','充值金额（分）','入账金额（分）','状态','建单结果','需复核','创建时间（UTC）','核验时间（UTC）','入账时间（UTC）'];
+  const lines=rows.map(publicOrder).map(r=>[r.id,r.member,r.provider,r.providerOrderId,r.environment,r.currency,r.amountMinor,r.creditedMinor,r.status,r.creationStatus,r.reviewRequired?'是':'否',r.createdAt,r.verifiedAt,r.creditedAt].map(csvCell).join(','));
+  return new Response('\ufeff'+[headers.map(csvCell).join(','),...lines].join('\r\n'),{headers:{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="master7-deposit-records.csv"'}});
  }
  const totals=await sql.prepare('SELECT count(*) AS orders,CAST(COALESCE(SUM(o.amount_minor),0) AS TEXT) AS ordered_minor,CAST(COALESCE(SUM(j.member_minor),0) AS TEXT) AS credited_minor,COALESCE(SUM(CASE WHEN o.review_required=1 THEN 1 ELSE 0 END),0) AS review_orders FROM portal_payment_orders o LEFT JOIN portal_wallet_journal j ON j.order_id=o.id WHERE '+where).get(...values);
  const page=rows.slice(0,100),last=page.at(-1),ids=page.map(r=>r.id);
  const reviews=ids.length?await sql.prepare('SELECT order_id,reason,created_at,observed_minor,observed_currency,observed_state,observed_trade_no FROM portal_payment_reviews WHERE order_id IN ('+ids.map(()=>'?').join(',')+') ORDER BY created_at DESC').all(...ids):[];
  const projected=page.map(row=>({...publicOrder(row),reviews:reviews.filter(r=>r.order_id===row.id).map(r=>({reason:r.reason,createdAt:r.created_at,observedMinor:r.observed_minor,observedCurrency:r.observed_currency,observedState:r.observed_state,observedTradeNo:r.observed_trade_no}))}));
- return json({tenantId:s.tenant,environment,currency:'MYR',range:dates,records:projected,summary:{orders:Number(totals.orders),orderedMinor:totals.ordered_minor,creditedMinor:totals.credited_minor,reviewOrders:Number(totals.review_orders)},nextCursor:rows.length>100?Buffer.from(JSON.stringify({at:last.created_at,id:last.id})).toString('base64url'):null,reconciliationScope:'provider_order_and_internal_credit; not_bank_settlement'});
+ return json({tenantId:s.tenant,environment,currency:'MYR',range:dates,records:projected,summary:{orders:Number(totals.orders),orderedMinor:totals.ordered_minor,creditedMinor:totals.credited_minor,reviewOrders:Number(totals.review_orders)},nextCursor:rows.length>100?Buffer.from(JSON.stringify({at:last.created_at,id:last.id})).toString('base64url'):null,reconciliationScope:'provider_or_bank_verified_order_and_internal_credit; bank_statement_not_imported'});
 }
