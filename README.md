@@ -17,6 +17,7 @@ npm run test:payments
 npm run test:wallet
 npm run test:wallet:http
 npm run test:checkout
+npm run test:owner-bootstrap
 ```
 
 源码不依赖 ChatGPT 登录或 Sites 运行环境。数据库迁移创建表结构并补充字段，不导入任何旧数据。测试使用临时数据库，结束后删除测试数据。
@@ -39,6 +40,8 @@ unset portal_password
 
 此命令从标准输入读取密码，只显示一次恢复码；已有老板时拒绝覆盖。创建的生产账号和密码不包含在本仓库。
 
+没有 Render Shell 时，可由部署负责人临时启用 `/owner-setup` 一次性 HTTPS 开户页。服务器只接收 `PORTAL_OWNER_BOOTSTRAP_TOKEN_SHA256` 的 SHA-256 摘要、固定账号与邮箱、到期时间；原始开户码和自选密码不得进入聊天、URL、源码或日志。页面只在数据库没有 owner、`PORTAL_OWNER_BOOTSTRAP_ENABLED=true` 且配置未过期时可用；成功后数据库唯一索引保证无法建立第二个 owner，恢复码只显示一次。变量名：`PORTAL_OWNER_BOOTSTRAP_USERNAME`、`PORTAL_OWNER_BOOTSTRAP_EMAIL`、`PORTAL_OWNER_BOOTSTRAP_TOKEN_SHA256`、`PORTAL_OWNER_BOOTSTRAP_EXPIRES_AT`。开户完成后应关闭 `PORTAL_OWNER_BOOTSTRAP_ENABLED`。
+
 ## 入口
 
 | 路径 | 用途 |
@@ -48,6 +51,7 @@ unset portal_password
 | `/accounts` | 老板审批或暂停客户账号 |
 | `/connections` | 老板配置通用回调接收通道 |
 | `/account` | 修改密码、撤销全部旧登录并轮换恢复码 |
+| `/owner-setup` | 仅首次部署时使用的一次性总部管理员安全开户 |
 | `/signin`、`/register`、`/reset` | 登录、申请注册、恢复码重设密码 |
 | `/health` | 数据库就绪检查与部署提交标识 |
 

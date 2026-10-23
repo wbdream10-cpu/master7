@@ -16,7 +16,8 @@
     "test:payments": "node standalone/payment-channels.test.mjs && node standalone/vpay-contract.test.mjs",
     "test:wallet": "node standalone/wallet.test.mjs && node standalone/wallet.test.mjs --postgres",
     "test:wallet:http": "node standalone/wallet-http.test.mjs",
-    "test:checkout": "node standalone/vpay-checkout.test.mjs && node standalone/vpay-checkout.test.mjs --postgres"
+    "test:checkout": "node standalone/vpay-checkout.test.mjs && node standalone/vpay-checkout.test.mjs --postgres",
+    "test:owner-bootstrap": "node standalone/owner-bootstrap.test.mjs && node standalone/owner-bootstrap.test.mjs --postgres"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
