@@ -64,6 +64,7 @@
 .payment-diagnostics{margin-top:22px;padding-top:18px;border-top:1px solid #edf1f7}
 .payment-diagnostics summary{font-size:12px;color:#536c8e;cursor:pointer}
 .payment-diagnostics>p{font-size:11px;color:#8b99ac;line-height:1.8;margin-top:12px}
+.payment-diagnostics>h3{margin-top:20px;color:#657d99;font-size:11px;letter-spacing:.04em}
 .payment-diagnostics-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px 16px;margin:18px 0}
 .payment-diagnostics-grid>div{min-width:0}
 .payment-diagnostics-grid dt{font-size:10px;color:#91a0b5;margin-bottom:7px}
