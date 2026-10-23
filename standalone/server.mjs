@@ -13,6 +13,7 @@ import {createVPaySettlement,getWallet,getPaymentRecords} from './wallet.mjs';
 import {createVPayCheckout} from './vpay-checkout.mjs';
 import {createSponsoredGamesHandler} from './sponsored-games.mjs';
 import {BankReceiptUploadError,createBankDeposits,readBankReceiptBody} from './bank-deposits.mjs';
+import {createWithdrawals} from './withdrawals.mjs';
 const loopbackHosts=new Set(['127.0.0.1','localhost','[::1]']);
 function configuredWebOrigin(value,name){
  const raw=String(value||'').trim();
@@ -73,6 +74,7 @@ const sponsoredGames=createSponsoredGamesHandler({
  tenantExists:id=>withStorage(async()=>Boolean(await sql.prepare('SELECT id FROM brands WHERE id=?').get(id))),
 });
 const bankDeposits=createBankDeposits();
+const withdrawals=createWithdrawals();
 async function dispatch(req){
  const url=new URL(req.url,origin);
  const bankReceipt=url.pathname.match(/^\/api\/v1\/bank-deposits\/([^/]+)\/receipt$/);
@@ -111,6 +113,23 @@ async function dispatch(req){
   if(url.pathname==='/api/v1/bank-deposits')return bankDeposits.submit(user,tenant,data);
   if(url.pathname==='/api/v1/finance-staff')return bankDeposits.setFinanceAccess(user,tenant,data);
   return json({error:'Not found'},404);
+ }
+ const withdrawalReview=url.pathname.match(/^\/api\/v1\/withdrawals\/([^/]+)\/review$/);
+ if(['/api/v1/withdrawals/config','/api/v1/withdrawals','/api/v1/withdrawals/export'].includes(url.pathname)||withdrawalReview){
+  const user=await withStorage(()=>sessionUser(req.headers.cookie)),tenant=url.searchParams.get('tenant');
+  if(req.method==='GET'){
+   if(withdrawalReview)return json({error:'Method not allowed'},405);
+   if(url.pathname==='/api/v1/withdrawals/config')return withdrawals.configuration(user,tenant);
+   if(url.pathname==='/api/v1/withdrawals/export')return withdrawals.exportRecords(user,tenant);
+   return withdrawals.list(user,tenant);
+  }
+  if(req.method!=='POST'||url.pathname.endsWith('/config')||url.pathname.endsWith('/export'))return json({error:'Method not allowed'},405);
+  if(!user)return json({error:'请先登录'},401);
+  if(!originAllowed(req.headers.origin))return json({error:'请求来源不受信任'},403);
+  if(req.headers['x-portal-request']!=='1'||!String(req.headers['content-type']).startsWith('application/json'))return json({error:'请求格式错误'},415);
+  let data;try{data=JSON.parse((await bodyOf(req)).toString('utf8'));}catch{return json({error:'请求格式错误'},400);}
+  if(!data||typeof data!=='object'||Array.isArray(data))return json({error:'请求格式错误'},400);
+  return withdrawalReview?withdrawals.review(user,tenant,withdrawalReview[1],data):withdrawals.submit(user,tenant,data);
  }
  if(url.pathname==='/api/v1/sponsored-games'){
   if(req.method!=='GET')return json({error:'Method not allowed'},405);

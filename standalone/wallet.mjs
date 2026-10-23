@@ -2,6 +2,7 @@ import {randomUUID,createHash,timingSafeEqual} from 'node:crypto';
 import {sql,withStorage} from './runtime.mjs';
 import {normalizeVPayMYR,inspectVPayCreateResult,inspectVPayNotification,inspectVPayQueryResult,VPayContractError} from './vpay-contract.mjs';
 import {createVPayOrderVerifier} from './vpay-gateway.mjs';
+import {withdrawalWalletState} from './withdrawals.mjs';
 
 const json=(value,status=200)=>Response.json(value,{status});
 const identifier=v=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,50}$/.test(v);
@@ -151,8 +152,12 @@ export async function getWallet(user,selected,environment){
  const s=await access(user,selected);if(s.error)return s.error;
  if(user.role==='employee')return json({error:'没有钱包余额查看权限'},403);
  if(!environments.has(environment))return json({error:'请选择测试或正式环境'},400);
+ if(environment==='production'){
+  const wallet=await withdrawalWalletState(s.tenant,user.userId);
+  return json({tenantId:s.tenant,environment,currency:'MYR',balanceMinor:wallet.balanceMinor,postedBalanceMinor:wallet.balanceMinor,heldMinor:wallet.heldMinor,availableMinor:wallet.availableMinor,source:'wallet_journals',scope:'verified_deposit_credits_minus_paid_withdrawals'});
+ }
  const row=await sql.prepare('SELECT CAST(COALESCE(SUM(member_minor),0) AS TEXT) AS balance FROM portal_wallet_journal WHERE tenant_id=? AND user_id=? AND environment=? AND currency=?').get(s.tenant,user.userId,environment,'MYR');
- return json({tenantId:s.tenant,environment,currency:'MYR',balanceMinor:row.balance,source:'wallet_journal',scope:'deposit_credits_only'});
+ return json({tenantId:s.tenant,environment,currency:'MYR',balanceMinor:row.balance,postedBalanceMinor:row.balance,heldMinor:'0',availableMinor:row.balance,source:'wallet_journal',scope:'deposit_credits_only'});
 }
 function localDate(value){
  const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kuching',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(value);

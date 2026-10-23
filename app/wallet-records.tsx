@@ -2,6 +2,7 @@
 import {useEffect,useRef,useState} from 'react';
 type RecordRow={id:string;tenantId:string;member:string;provider:'vpay'|'gspay_myr'|'bank_transfer'|'unknown';providerOrderId:string|null;environment:string;currency:string;amountMinor:string;creditedMinor:string;status:string;creationStatus:string;reviewRequired:boolean;reviewCount:number;createdAt:string;verifiedAt:string|null;creditedAt:string|null;reviews:{reason:string;createdAt:string;observedMinor:string|null;observedCurrency:string|null}[]};
 type RecordsData={tenantId:string;environment:string;records:RecordRow[];summary:{orders:number;orderedMinor:string;creditedMinor:string;reviewOrders:number};nextCursor:string|null};
+type WalletData={balanceMinor:string;postedBalanceMinor?:string;heldMinor?:string;availableMinor?:string};
 const money=(minor:string)=>{if(!/^-?\d+$/.test(minor))return '未知';const n=BigInt(minor),positive=n<0n?-n:n;return(n<0n?'-':'')+(positive/100n).toString()+'.'+(positive%100n).toString().padStart(2,'0');};
 const instant=(v:string|null)=>v?new Date(v).toLocaleString('zh-CN',{timeZone:'Asia/Kuching',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}):'—';
 const localDate=(value:Date)=>{const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kuching',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(value),part=(type:string)=>parts.find(item=>item.type===type)?.value;return `${part('year')}-${part('month')}-${part('day')}`;};
@@ -10,23 +11,23 @@ const providerLabel:Record<RecordRow['provider'],string>={vpay:'VPay',gspay_myr:
 export default function WalletRecords({tenantId,admin}:{tenantId:string;admin:boolean}){
  const today=localDate(new Date());
  const [environment,setEnvironment]=useState('production'),[from,setFrom]=useState(shiftDate(today,-6)),[to,setTo]=useState(today),[revision,setRevision]=useState(0),[cursor,setCursor]=useState('');
- const [state,setState]=useState<{query:string;busy:boolean;error:string;data:RecordsData|null;balance:string|null}>({query:'',busy:true,error:'',data:null,balance:null});
+ const [state,setState]=useState<{query:string;busy:boolean;error:string;data:RecordsData|null;wallet:WalletData|null}>({query:'',busy:true,error:'',data:null,wallet:null});
  const sequence=useRef(0);
  const params=new URLSearchParams({tenant:tenantId,environment,from,to});if(cursor)params.set('cursor',cursor);
  const query=params.toString();
  useEffect(()=>{
   const current=++sequence.current,controller=new AbortController();
-  setState({query,busy:true,error:'',data:null,balance:null});
+  setState({query,busy:true,error:'',data:null,wallet:null});
   const timer=setTimeout(()=>controller.abort(),12000);
   void(async()=>{try{
    const records=await fetch('/api/v1/payment-records?'+query,{cache:'no-store',signal:controller.signal});
    const result=await records.json();
    if(!records.ok)throw Error(result.error||'记录暂时无法读取');
    if(result.tenantId!==tenantId||result.environment!==environment||!Array.isArray(result.records)||result.records.some((r:RecordRow)=>r.tenantId!==tenantId||r.environment!==environment||!Object.hasOwn(providerLabel,r.provider)))throw Error('记录归属或充值渠道暂时无法确认');
-   let balance=null;
-   if(!admin){const r=await fetch('/api/v1/wallet?'+new URLSearchParams({tenant:tenantId,environment}),{cache:'no-store',signal:controller.signal});const d=await r.json();if(!r.ok||d.tenantId!==tenantId||d.environment!==environment)throw Error('余额暂时无法读取');balance=d.balanceMinor;}
-   if(current===sequence.current)setState({query,busy:false,error:'',data:result,balance});
-  }catch(e){if(current===sequence.current)setState({query,busy:false,error:e instanceof Error?e.message:'读取失败',data:null,balance:null});}finally{clearTimeout(timer);}})();
+   let wallet=null;
+   if(!admin){const r=await fetch('/api/v1/wallet?'+new URLSearchParams({tenant:tenantId,environment}),{cache:'no-store',signal:controller.signal});const d=await r.json();if(!r.ok||d.tenantId!==tenantId||d.environment!==environment||typeof d.balanceMinor!=='string')throw Error('余额暂时无法读取');wallet={balanceMinor:d.balanceMinor,...(typeof d.postedBalanceMinor==='string'?{postedBalanceMinor:d.postedBalanceMinor}:{}),...(typeof d.heldMinor==='string'?{heldMinor:d.heldMinor}:{}),...(typeof d.availableMinor==='string'?{availableMinor:d.availableMinor}:{})};}
+   if(current===sequence.current)setState({query,busy:false,error:'',data:result,wallet});
+  }catch(e){if(current===sequence.current)setState({query,busy:false,error:e instanceof Error?e.message:'读取失败',data:null,wallet:null});}finally{clearTimeout(timer);}})();
   return()=>{sequence.current++;controller.abort();clearTimeout(timer);};
  },[tenantId,environment,from,to,revision,cursor,admin]);
  const update=(action:()=>void)=>{setCursor('');action();};
@@ -44,7 +45,7 @@ export default function WalletRecords({tenantId,admin}:{tenantId:string;admin:bo
   {state.query===query&&state.error&&<p className="form-error" role="alert">{state.error}</p>}
   {busy&&<p role="status">正在读取余额和记录…</p>}
   {data&&<><div className="wallet-summary">
-   {!admin&&state.balance!==null&&<div><span>{environment==='uat'?'测试充值余额':'已核验充值余额'}</span><strong>{money(state.balance)} MYR</strong></div>}
+   {!admin&&state.wallet&&environment==='production'&&typeof state.wallet.postedBalanceMinor==='string'&&typeof state.wallet.heldMinor==='string'&&typeof state.wallet.availableMinor==='string'?<><div><span>钱包余额</span><strong>{money(state.wallet.postedBalanceMinor)} MYR</strong></div><div><span>提现冻结</span><strong>{money(state.wallet.heldMinor)} MYR</strong></div><div><span>可用余额</span><strong>{money(state.wallet.availableMinor)} MYR</strong></div></>:!admin&&state.wallet&&<div><span>{environment==='uat'?'测试充值余额':'已核验充值余额'}</span><strong>{money(state.wallet.balanceMinor)} MYR</strong></div>}
    <div><span>期间订单数</span><strong>{data.summary.orders}</strong></div><div><span>期间充值申请</span><strong>{money(data.summary.orderedMinor)} MYR</strong></div><div><span>期间已入账</span><strong>{money(data.summary.creditedMinor)} MYR</strong></div><div><span>需要复核</span><strong>{data.summary.reviewOrders}</strong></div>
   </div>{admin&&<a className="secondary" href={'/api/v1/payment-records/export?'+new URLSearchParams({tenant:tenantId,environment,from,to})}>导出期间全部记录（CSV）</a>}</>}
   </div>

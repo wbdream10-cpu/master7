@@ -376,6 +376,8 @@ export function createBankDeposits({now=()=>new Date(),rateLimit=limited,env=pro
   const bankAccount=await sql.prepare('SELECT enabled FROM portal_bank_accounts WHERE tenant_id=?').get(scope.tenantId);
   const registrations=await sql.prepare(`SELECT count(*) AS count FROM portal_users u LEFT JOIN members m ON m.email=u.email LEFT JOIN portal_staff p ON p.user_id=u.id
    WHERE u.role='customer' AND p.user_id IS NULL AND COALESCE(m.tenant_id,'main')=? AND u.created_at>=? AND u.created_at<?`).get(scope.tenantId,from,to);
+  const paidWithdrawals=await sql.prepare(`SELECT count(*) AS count,CAST(COALESCE(SUM(amount_minor),0) AS TEXT) AS amount FROM portal_withdrawal_requests
+   WHERE tenant_id=? AND status='paid' AND paid_at>=? AND paid_at<?`).get(scope.tenantId,from,to);
   const submittedCount=Number(bankSubmitted.count)+Number(vpaySubmitted.count)+Number(gspaySubmitted.count)+Number(unknownSubmitted.count),submittedAmount=(BigInt(bankSubmitted.amount)+BigInt(vpaySubmitted.amount)+BigInt(gspaySubmitted.amount)+BigInt(unknownSubmitted.amount)).toString();
   const creditedCount=Number(bankCredited.count)+Number(vpayCredited.count)+Number(gspayCredited.count)+Number(unknownCredited.count),creditedAmount=(BigInt(bankCredited.amount)+BigInt(vpayCredited.amount)+BigInt(gspayCredited.amount)+BigInt(unknownCredited.amount)).toString();
   const vpayEnabled=vpayProductionReady(env);
@@ -387,7 +389,7 @@ export function createBankDeposits({now=()=>new Date(),rateLimit=limited,env=pro
      unknown:{enabled:false,count:Number(unknownSubmitted.count),amountMinor:String(unknownSubmitted.amount),submitted:{count:Number(unknownSubmitted.count),amountMinor:String(unknownSubmitted.amount)},credited:{count:Number(unknownCredited.count),amountMinor:String(unknownCredited.amount)}},
      bank_transfer:{enabled:Boolean(bankAccount?.enabled),count:Number(bankSubmitted.count),amountMinor:String(bankSubmitted.amount),submitted:{count:Number(bankSubmitted.count),amountMinor:String(bankSubmitted.amount)},credited:{count:Number(bankCredited.count),amountMinor:String(bankCredited.amount)}}}},
    bankPendingReview:{count:Number(pending.count),amountMinor:String(pending.amount)},
-   withdrawals:{enabled:false,count:0,amountMinor:'0'},newRegistrations:Number(registrations.count)});
+   withdrawals:{enabled:env.PORTAL_WITHDRAWALS_ENABLED==='true',count:Number(paidWithdrawals.count),amountMinor:String(paidWithdrawals.amount)},newRegistrations:Number(registrations.count)});
  });}
 
  return {getConfiguration,saveConfiguration,listFinanceStaff,setFinanceAccess,list,submit,uploadReceipt,readReceipt,review,getTodayMetrics};
