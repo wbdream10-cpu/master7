@@ -20,7 +20,8 @@ if(storageKind==='sqlite'){
 }else{
  const {Pool,types}=await import('pg');
  types.setTypeParser(20,v=>{const n=Number(v);if(!Number.isSafeInteger(n))throw Error('Database integer exceeds safe range.');return n;});
- const parsed=new URL(postgresUrl);
+ let parsed;
+ try{parsed=new URL(postgresUrl);}catch{throw Error('PORTAL_POSTGRES_URL is invalid.');}
  if(!['postgres:','postgresql:'].includes(parsed.protocol))throw Error('PORTAL_POSTGRES_URL must be a Postgres connection string.');
  for(const key of [...parsed.searchParams.keys()])if(key.toLowerCase().startsWith('ssl'))parsed.searchParams.delete(key);
  const ca=process.env.PORTAL_POSTGRES_CA_FILE?readFileSync(process.env.PORTAL_POSTGRES_CA_FILE,'utf8'):undefined;
