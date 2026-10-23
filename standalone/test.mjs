@@ -21,6 +21,8 @@ const session=r=>r.headers.get('set-cookie').split(';')[0];
 try{
  assert.equal((await req('/')).status,303);assert.equal((await req('/admin')).status,303);assert.equal((await get()).status,401);assert.equal((await req('/health')).status,200);
  assert.equal((await req('/signin')).headers.get('referrer-policy'),'same-origin');
+ assert((await (await req('/signin')).text()).includes('src="/brand/master7-logo.jpg"'));
+ const logoAsset=await req('/brand/master7-logo.jpg');assert.equal(logoAsset.status,200);assert.equal(logoAsset.headers.get('content-type'),'image/jpeg');assert.deepEqual(Buffer.from(await logoAsset.arrayBuffer()),readFileSync('public/brand/master7-logo.jpg'));
  assert.equal((await form('/auth/login',{username:'owner',password},'','https://evil.test')).status,403);
  assert.equal((await form('/auth/login',{username:'owner',password},'','null')).status,403);
  assert.equal((await req('/auth/login',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({username:'owner',password})})).status,403);

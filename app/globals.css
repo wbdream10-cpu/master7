@@ -37,6 +37,11 @@
 .brand-preview-top>div>span{display:block;margin-top:5px;color:#8b99ac;font-size:10px}
 .brand-preview-mark{width:54px;height:54px;display:grid;place-items:center;flex-shrink:0;border-radius:12px;background:var(--brand);color:var(--brand-ink);font-size:28px;font-weight:700}
 .brand-preview-mark img{width:100%;height:100%;object-fit:contain;background:#fff;border-radius:11px}
+.shell .brandmark.official-logo{width:64px;height:64px;background:#000;border-radius:8px;box-shadow:none}
+.brand-preview-mark.official-logo{width:84px;height:84px;background:#000;border-radius:8px}
+.brandmark.official-logo img,.brand-preview-mark.official-logo img{display:block;object-fit:contain;object-position:center;border-radius:0;background:#000}
+.brandmark.auth-brand-logo{width:128px;height:128px;margin-bottom:22px;background:#000;border-radius:8px;box-shadow:none}
+.brandmark.auth-brand-logo img{display:block;width:100%;height:100%;object-fit:contain;object-position:center;background:#000;border-radius:0}
 .brand-preview-main{padding:24px 20px}
 .brand-preview-language{display:inline-block;margin-bottom:16px;padding:5px 8px;border:1px solid #e5ebf3;border-radius:5px;color:#72849d;font-size:10px}
 .brand-preview-main h3{font-size:22px;line-height:1.6;overflow-wrap:anywhere;color:#263f61}
