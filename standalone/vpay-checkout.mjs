@@ -36,12 +36,12 @@ export function createVPayCheckout({settlement,env=process.env,createOrder,now=(
   }
   const fingerprint=createHash('sha256').update(JSON.stringify({merchant:traderId,environment,amount:canonical.amount,tradeCode:canonical.trade_code,payerName:canonical.payer_name,returnUrl:canonical.callback_url})).digest('hex');
   const claimed=await withStorage(async()=>{
-   const change=await sql.prepare("UPDATE portal_payment_orders SET create_outcome='in_flight',create_attempted_at=?,create_fingerprint=?,trade_code=? WHERE id=? AND create_outcome='not_sent' AND settlement_status='created' AND review_required=0").run(now().toISOString(),fingerprint,canonical.trade_code,order.id);
+   const change=await sql.prepare("UPDATE portal_payment_orders SET create_outcome='in_flight',create_attempted_at=?,create_fingerprint=?,trade_code=? WHERE id=? AND provider='vpay' AND create_outcome='not_sent' AND settlement_status='created' AND review_required=0").run(now().toISOString(),fingerprint,canonical.trade_code,order.id);
    const current=await sql.prepare('SELECT * FROM portal_payment_orders WHERE id=?').get(order.id);
    return {send:change.changes===1,order:current};
   });
   order=claimed.order;
-  if(order.create_fingerprint!==fingerprint)return json({error:'VPAY_IDEMPOTENCY_CONFLICT'},409);
+  if(order.provider!=='vpay'||order.create_fingerprint!==fingerprint)return json({error:'VPAY_IDEMPOTENCY_CONFLICT'},409);
   function result(row){
    if(row.review_required)return json({id:row.id,status:'review_required',payUrl:null},202);
    if(row.settlement_status==='credited')return json({id:row.id,status:'credited',payUrl:null},200);
@@ -54,14 +54,14 @@ export function createVPayCheckout({settlement,env=process.env,createOrder,now=(
    const checked=inspectVPayCreateResult(receipt,{traderId,outTradeNo:order.id,amount:draft.amount,currency:'MYR'});
    await settlement.bindCreatedOrder(order.id,receipt);
    const current=await withStorage(async()=>{
-    await sql.prepare("UPDATE portal_payment_orders SET create_outcome='created',checkout_url=?,expires_at_raw=? WHERE id=? AND trade_no=?").run(checked.payUrl,checked.expiresAtRaw,order.id,checked.tradeNo);
+    await sql.prepare("UPDATE portal_payment_orders SET create_outcome='created',checkout_url=?,expires_at_raw=? WHERE id=? AND provider='vpay' AND trade_no=?").run(checked.payUrl,checked.expiresAtRaw,order.id,checked.tradeNo);
     return sql.prepare('SELECT * FROM portal_payment_orders WHERE id=?').get(order.id);
    });
    return result(current);
   }catch{
    // A timeout never proves that the provider did not create an order.
    // The durable claim prevents automatic resending, including after restart.
-   await withStorage(()=>sql.prepare("UPDATE portal_payment_orders SET create_outcome='unknown' WHERE id=? AND create_outcome='in_flight' AND settlement_status<>'credited'").run(order.id));
+   await withStorage(()=>sql.prepare("UPDATE portal_payment_orders SET create_outcome='unknown' WHERE id=? AND provider='vpay' AND create_outcome='in_flight' AND settlement_status<>'credited'").run(order.id));
    const recovered=await withStorage(()=>sql.prepare('SELECT * FROM portal_payment_orders WHERE id=?').get(order.id));
    if(recovered.settlement_status==='credited')return result(recovered);
    await settlement.noteCreationPending(order,{});

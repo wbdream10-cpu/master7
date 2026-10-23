@@ -168,7 +168,7 @@ test('CSV export is manager-only, complete for the selected period, safe for spr
 
 test('record pagination has stable boundaries and period totals include every page',async()=>{
  await withStorage(async()=>{
-  for(let i=0;i<105;i++)await sql.prepare("INSERT INTO portal_payment_orders(id,tenant_id,user_id,request_key,merchant_id,environment,amount_minor,currency,settlement_status,created_at) VALUES (?,?,?,?,'123456','uat',100,'MYR','created',?)").run('page_'+String(i).padStart(4,'0'),'beta','bob','page_key_'+i,at);
+  for(let i=0;i<105;i++)await sql.prepare("INSERT INTO portal_payment_orders(id,tenant_id,user_id,request_key,merchant_id,environment,amount_minor,currency,settlement_status,created_at,provider) VALUES (?,?,?,?,'123456','uat',100,'MYR','created',?,'vpay')").run('page_'+String(i).padStart(4,'0'),'beta','bob','page_key_'+i,at);
  });
  const first=await (await records(owner,{tenant:'beta'})).json();assert.equal(first.records.length,100);assert(first.nextCursor);
  const second=await (await records(owner,{tenant:'beta',cursor:first.nextCursor})).json();assert.equal(first.summary.orders,second.summary.orders);assert(second.records.length>0);assert.equal(second.nextCursor,null);

@@ -79,8 +79,8 @@ test('receipt reader enforces a separate 2 MiB streaming cap',async()=>{
 });
 
 test('private receipt upload checks type, magic, dimensions, owner and tenant',async()=>{
- await sql.prepare(`INSERT INTO portal_payment_orders(id,tenant_id,user_id,request_key,merchant_id,environment,amount_minor,currency,trade_no,settlement_status,review_required,created_at,verified_at,credited_at,create_outcome,trade_code)
-  VALUES ('receipt-invariant-order','alpha','alice','receipt_invariant_key','manual_bank','production',12345,'MYR','receipt-invariant-order','credited',0,?,?,?,'created','bank_transfer')`).run(createdAt,createdAt,createdAt);
+ await sql.prepare(`INSERT INTO portal_payment_orders(id,tenant_id,user_id,request_key,merchant_id,environment,amount_minor,currency,trade_no,settlement_status,review_required,created_at,verified_at,credited_at,create_outcome,trade_code,provider)
+  VALUES ('receipt-invariant-order','alpha','alice','receipt_invariant_key','manual_bank','production',12345,'MYR','receipt-invariant-order','credited',0,?,?,?,'created','bank_transfer','bank_transfer')`).run(createdAt,createdAt,createdAt);
  await assert.rejects(sql.prepare(`UPDATE portal_bank_deposits SET status='approved',review_request_key='schema_receipt_review',review_fingerprint=?,review_decision='approve',reviewed_by='boss',reviewed_at=?,wallet_order_id='receipt-invariant-order' WHERE id=?`).run('0'.repeat(64),createdAt,first.id));
  assert.equal((await sql.prepare('SELECT status FROM portal_bank_deposits WHERE id=?').get(first.id)).status,'awaiting_review');await sql.prepare('DELETE FROM portal_payment_orders WHERE id=?').run('receipt-invariant-order');
  assert.equal((await bank.review(boss,null,first.id,{decision:'approve',bankVerified:true,receiptSha256:'0'.repeat(64),reviewKey:'review_key_no_receipt'})).status,409);
@@ -179,8 +179,8 @@ test('rejection is final, idempotent and never credits the wallet',async()=>{
 
 test('today metrics are Asia/Kuching tenant-scoped, channel-separated and truthful about disabled flows',async()=>{
  await withStorage(async()=>{
-  await sql.prepare(`INSERT INTO portal_payment_orders(id,tenant_id,user_id,request_key,merchant_id,environment,amount_minor,currency,trade_no,settlement_status,review_required,created_at,verified_at,credited_at,create_outcome,trade_code)
-   VALUES ('synthetic-vpay-order','alpha','alice','synthetic_vpay_key','3647','production',500,'MYR','synthetic-vpay-trade','credited',0,?,?,?,'created','2')`).run(createdAt,createdAt,createdAt);
+  await sql.prepare(`INSERT INTO portal_payment_orders(id,tenant_id,user_id,request_key,merchant_id,environment,amount_minor,currency,trade_no,settlement_status,review_required,created_at,verified_at,credited_at,create_outcome,trade_code,provider)
+   VALUES ('synthetic-vpay-order','alpha','alice','synthetic_vpay_key','3647','production',500,'MYR','synthetic-vpay-trade','credited',0,?,?,?,'created','2','vpay')`).run(createdAt,createdAt,createdAt);
   await sql.prepare(`INSERT INTO portal_wallet_journal(id,order_id,tenant_id,user_id,environment,currency,member_minor,clearing_minor,created_at)
    VALUES ('synthetic-vpay-journal','synthetic-vpay-order','alpha','alice','production','MYR',500,-500,?)`).run(createdAt);
  });

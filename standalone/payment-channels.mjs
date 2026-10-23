@@ -183,7 +183,7 @@ export function createPaymentChannelsHandler({
       result.diagnostics = {
         ...source,
         limitations: {
-          vpay: 'platform_settlement_not_implemented',
+          vpay: 'checkout_disabled_until_production_qa',
           gspay_myr: 'adapter_not_implemented',
           gspay_usdt: 'new_orders_stopped',
         },

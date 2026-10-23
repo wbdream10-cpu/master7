@@ -19,7 +19,7 @@ export function createVPaySettlement({env=process.env,verifyOrder,now=()=>new Da
  const token=env.PORTAL_VPAY_CALLBACK_TOKEN;
  const enabled=env.PORTAL_VPAY_SETTLEMENT_ENABLED==='true'&&merchant(trader)&&['uat','production'].includes(environment)&&typeof token==='string'&&Buffer.byteLength(token)>=32&&Buffer.byteLength(token)<=1024;
  const verify=verifyOrder||createVPayOrderVerifier({token:env.PORTAL_VPAY_QUERY_TOKEN,environment});
- const find=id=>withStorage(()=>sql.prepare('SELECT * FROM portal_payment_orders WHERE id=? AND merchant_id=? AND environment=?').get(id,trader,environment));
+const find=id=>withStorage(()=>sql.prepare("SELECT * FROM portal_payment_orders WHERE id=? AND provider='vpay' AND merchant_id=? AND environment=?").get(id,trader,environment));
  async function review(order,reason,evidence,{hold=true}={}){
   // VPay sign can contain a reversible encoding of credentials: never persist it.
   let observedMinor=null;try{observedMinor=normalizeVPayMYR(evidence?.amount).amountMinor;}catch{}
@@ -28,7 +28,7 @@ export function createVPaySettlement({env=process.env,verifyOrder,now=()=>new Da
   await withStorage(async()=>{
    await sql.exec('BEGIN IMMEDIATE');try{
     await sql.prepare('INSERT INTO portal_payment_reviews(id,order_id,tenant_id,reason,evidence_hash,created_at,observed_minor,observed_currency,observed_state,observed_trade_no) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(order_id,reason,evidence_hash) DO NOTHING').run(randomUUID(),order.id,order.tenant_id,reason,hash,at,observed.amountMinor,observed.currency,observed.state,observed.tradeNo);
-    if(hold)await sql.prepare('UPDATE portal_payment_orders SET review_required=1 WHERE id=?').run(order.id);
+    if(hold)await sql.prepare("UPDATE portal_payment_orders SET review_required=1 WHERE id=? AND provider='vpay'").run(order.id);
     await sql.exec('COMMIT');
    }catch(e){await sql.exec('ROLLBACK');throw e;}
   });
@@ -48,9 +48,9 @@ export function createVPaySettlement({env=process.env,verifyOrder,now=()=>new Da
    const member=await sql.prepare("SELECT u.id,COALESCE(m.tenant_id,'main') AS tenant_id FROM portal_users u LEFT JOIN members m ON m.email=u.email LEFT JOIN portal_staff p ON p.user_id=u.id WHERE u.id=? AND u.role='customer' AND u.approved=1 AND p.user_id IS NULL").get(user?.userId||'');
    if(!member||user.role!=='customer'||(user.tenantId&&user.tenantId!==member.tenant_id))throw Error('VPAY_MEMBER_UNAVAILABLE');
    const id=randomUUID(),at=now().toISOString();
-   await sql.prepare("INSERT INTO portal_payment_orders(id,tenant_id,user_id,request_key,merchant_id,environment,amount_minor,currency,settlement_status,created_at) VALUES (?,?,?,?,?,?,?,?,'created',?) ON CONFLICT(user_id,request_key) DO NOTHING").run(id,member.tenant_id,member.id,requestKey,trader,environment,Number(normalized.amountMinor),'MYR',at);
+   await sql.prepare("INSERT INTO portal_payment_orders(id,tenant_id,user_id,request_key,merchant_id,environment,amount_minor,currency,settlement_status,created_at,provider) VALUES (?,?,?,?,?,?,?,?,'created',?,'vpay') ON CONFLICT(user_id,request_key) DO NOTHING").run(id,member.tenant_id,member.id,requestKey,trader,environment,Number(normalized.amountMinor),'MYR',at);
    const order=await sql.prepare('SELECT * FROM portal_payment_orders WHERE user_id=? AND request_key=?').get(member.id,requestKey);
-   if(order.tenant_id!==member.tenant_id||order.merchant_id!==trader||order.environment!==environment||BigInt(order.amount_minor)!==BigInt(normalized.amountMinor))throw Error('VPAY_IDEMPOTENCY_CONFLICT');
+  if(order.tenant_id!==member.tenant_id||order.provider!=='vpay'||order.merchant_id!==trader||order.environment!==environment||BigInt(order.amount_minor)!==BigInt(normalized.amountMinor))throw Error('VPAY_IDEMPOTENCY_CONFLICT');
    return order;
   });
  }
@@ -59,7 +59,7 @@ export function createVPaySettlement({env=process.env,verifyOrder,now=()=>new Da
   const order=await find(id);if(!order)throw Error('VPAY_ORDER_UNKNOWN');
   const result=inspectVPayCreateResult(providerReceipt,expected(order));
   return withStorage(async()=>{
-   const changed=await sql.prepare("UPDATE portal_payment_orders SET trade_no=?,settlement_status='pending' WHERE id=? AND settlement_status='created' AND review_required=0").run(result.tradeNo,id);
+   const changed=await sql.prepare("UPDATE portal_payment_orders SET trade_no=?,settlement_status='pending' WHERE id=? AND provider='vpay' AND settlement_status='created' AND review_required=0").run(result.tradeNo,id);
    const current=await find(id);
    if(!changed.changes&&current?.trade_no!==result.tradeNo)throw Error('VPAY_ORDER_BINDING_CONFLICT');
    return current;
@@ -110,7 +110,7 @@ export function createVPaySettlement({env=process.env,verifyOrder,now=()=>new Da
      return json({error:'VPAY_RECONCILIATION_REQUIRED'},503);
     }
     // The conditional write serializes concurrent workers on this order as well.
-    const changed=await sql.prepare("UPDATE portal_payment_orders SET settlement_status='credited',trade_no=?,create_outcome='created',verified_at=?,credited_at=? WHERE id=? AND review_required=0 AND merchant_id=? AND environment=? AND ((settlement_status='pending' AND trade_no=?) OR (settlement_status='created' AND trade_no IS NULL AND create_outcome IN ('in_flight','unknown')))").run(order.trade_no,at,at,order.id,trader,environment,order.trade_no);
+    const changed=await sql.prepare("UPDATE portal_payment_orders SET settlement_status='credited',trade_no=?,create_outcome='created',verified_at=?,credited_at=? WHERE id=? AND provider='vpay' AND review_required=0 AND merchant_id=? AND environment=? AND ((settlement_status='pending' AND trade_no=?) OR (settlement_status='created' AND trade_no IS NULL AND create_outcome IN ('in_flight','unknown')))").run(order.trade_no,at,at,order.id,trader,environment,order.trade_no);
     if(!changed.changes){
      const current=await find(order.id),done=current?.settlement_status==='credited'&&!current.review_required&&await hasCredit(current);
      await sql.exec('ROLLBACK');return done?success():json({error:'VPAY_SETTLEMENT_CONFLICT'},503);
@@ -127,38 +127,54 @@ export function createVPaySettlement({env=process.env,verifyOrder,now=()=>new Da
  return {reserveForMember,bindCreatedOrder,receive,noteCreationPending:(order,evidence)=>review(order,'VPAY_ORDER_CREATION_PENDING',evidence,{hold:false})};
 }
 
-async function access(user,selected,managerOnly=false){
+async function access(user,selected,{financeRecords=false}={}){
  if(!user)return {error:json({error:'Authentication required'},401)};
- const manager=['owner','tenant_owner'].includes(user.role);
- if(!['owner','tenant_owner','customer'].includes(user.role)||(managerOnly&&!manager))return {error:json({error:'无资金记录查看权限'},403)};
- const member=await sql.prepare('SELECT tenant_id FROM members WHERE email=?').get(user.email);
- const bound=user.tenantId||member?.tenant_id||'main';
- if(user.role!=='owner'&&selected&&selected!==bound)return {error:json({error:'无权访问其他租户'},403)};
- const tenant=user.role==='owner'?(selected||'main'):bound;
+ if(!['owner','tenant_owner','employee','customer'].includes(user.role))return {error:json({error:'无资金记录查看权限'},403)};
+ const identity=await sql.prepare(`SELECT u.email,u.role,u.approved,p.tenant_id AS staff_tenant,p.role AS staff_role,m.tenant_id AS member_tenant,f.user_id AS finance_user_id
+  FROM portal_users u LEFT JOIN portal_staff p ON p.user_id=u.id LEFT JOIN members m ON m.email=u.email
+  LEFT JOIN portal_finance_staff f ON f.user_id=u.id AND f.tenant_id=p.tenant_id WHERE u.id=?`).get(user.userId);
+ if(!identity||!identity.approved)return {error:json({error:'账号不可用'},403)};
+ const actualRole=identity.role==='owner'?'owner':identity.staff_role||'customer';
+ if(actualRole!==user.role)return {error:json({error:'账号权限已变化，请重新登录'},403)};
+ const manager=['owner','tenant_owner'].includes(actualRole);
+ const finance=actualRole==='employee'&&Boolean(identity.finance_user_id);
+ if(actualRole==='employee'&&(!financeRecords||!finance))return {error:json({error:'无资金记录查看权限'},403)};
+ const bound=actualRole==='owner'?null:identity.staff_tenant||identity.member_tenant||'main';
+ if(actualRole!=='owner'&&user.tenantId&&user.tenantId!==bound)return {error:json({error:'账号租户归属已变化，请重新登录'},403)};
+ if(actualRole!=='owner'&&selected&&selected!==bound)return {error:json({error:'无权访问其他租户'},403)};
+ const tenant=actualRole==='owner'?(selected||'main'):bound;
  if(tenant!=='main'&&!await sql.prepare('SELECT id FROM brands WHERE id=?').get(tenant))return {error:json({error:'租户不存在'},404)};
- return {tenant,manager};
+ return {tenant,manager,finance,canViewAll:manager||finance};
 }
 const environments=new Set(['uat','production']);
 export async function getWallet(user,selected,environment){
  const s=await access(user,selected);if(s.error)return s.error;
+ if(user.role==='employee')return json({error:'没有钱包余额查看权限'},403);
  if(!environments.has(environment))return json({error:'请选择测试或正式环境'},400);
  const row=await sql.prepare('SELECT CAST(COALESCE(SUM(member_minor),0) AS TEXT) AS balance FROM portal_wallet_journal WHERE tenant_id=? AND user_id=? AND environment=? AND currency=?').get(s.tenant,user.userId,environment,'MYR');
  return json({tenantId:s.tenant,environment,currency:'MYR',balanceMinor:row.balance,source:'wallet_journal',scope:'deposit_credits_only'});
 }
+function localDate(value){
+ const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kuching',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(value);
+ const part=type=>parts.find(item=>item.type===type)?.value;
+ return `${part('year')}-${part('month')}-${part('day')}`;
+}
+function shiftDate(value,days){const [year,month,day]=value.split('-').map(Number);return new Date(Date.UTC(year,month-1,day+days)).toISOString().slice(0,10);}
 function range(params){
- const today=new Date().toISOString().slice(0,10),from=params.get('from')||new Date(Date.now()-6*86400000).toISOString().slice(0,10),to=params.get('to')||today;
+ const today=localDate(new Date()),from=params.get('from')||shiftDate(today,-6),to=params.get('to')||today;
  const valid=v=>/^\d{4}-\d{2}-\d{2}$/.test(v)&&Number.isFinite(Date.parse(v+'T00:00:00Z'))&&new Date(v+'T00:00:00Z').toISOString().slice(0,10)===v;
  if(!valid(from)||!valid(to)||to<from||Date.parse(to)-Date.parse(from)>30*86400000)return null;
- return {from:from+'T00:00:00.000Z',to:new Date(Date.parse(to+'T00:00:00Z')+86400000).toISOString()};
+ return {from:new Date(from+'T00:00:00+08:00').toISOString(),to:new Date(shiftDate(to,1)+'T00:00:00+08:00').toISOString(),fromLocal:from,toLocal:to,timeZone:'Asia/Kuching'};
 }
-const publicOrder=row=>({id:row.id,tenantId:row.tenant_id,member:row.username,provider:row.merchant_id==='manual_bank'?'bank_transfer':'vpay',providerOrderId:row.trade_no,environment:row.environment,currency:row.currency,amountMinor:String(row.amount_minor),creditedMinor:String(row.member_minor||0),status:row.settlement_status,creationStatus:row.create_outcome,reviewRequired:!!row.review_required,reviewCount:Number(row.review_count),createdAt:row.created_at,verifiedAt:row.verified_at,creditedAt:row.credited_at});
+const publicOrder=row=>({id:row.id,tenantId:row.tenant_id,member:row.username,provider:row.provider||'unknown',providerOrderId:row.trade_no,environment:row.environment,currency:row.currency,amountMinor:String(row.amount_minor),creditedMinor:String(row.member_minor||0),status:row.settlement_status,creationStatus:row.create_outcome,reviewRequired:!!row.review_required,reviewCount:Number(row.review_count),createdAt:row.created_at,verifiedAt:row.verified_at,creditedAt:row.credited_at});
 const csvCell=value=>'"'+String(value??'').replace(/^[\u0000-\u0020]*[=+@\-]/,"'$&").replace(/"/g,'""')+'"';
 export async function getPaymentRecords(user,params,{exportCSV=false}={}){
- const s=await access(user,params.get('tenant'),exportCSV);if(s.error)return s.error;
+ const s=await access(user,params.get('tenant'),{financeRecords:true});if(s.error)return s.error;
+ if(exportCSV&&!s.canViewAll)return json({error:'只有获授权财务人员或管理员可以导出'},403);
  const environment=params.get('environment')||'production',dates=range(params);
- if(!environments.has(environment)||!dates)return json({error:'环境或日期无效；最多选择 31 天（UTC）'},400);
- const where='o.tenant_id=? AND o.environment=? AND o.created_at>=? AND o.created_at<?'+(s.manager?'':' AND o.user_id=?');
- const values=[s.tenant,environment,dates.from,dates.to,...(s.manager?[]:[user.userId])];
+ if(!environments.has(environment)||!dates)return json({error:'环境或日期无效；最多选择 31 天（Asia/Kuching）'},400);
+ const where='o.tenant_id=? AND o.environment=? AND o.created_at>=? AND o.created_at<?'+(s.canViewAll?'':' AND o.user_id=?');
+ const values=[s.tenant,environment,dates.from,dates.to,...(s.canViewAll?[]:[user.userId])];
  let cursor='';const cursorValues=[];
  if(params.has('cursor')){
   try{
@@ -176,7 +192,7 @@ export async function getPaymentRecords(user,params,{exportCSV=false}={}){
   await sql.prepare('INSERT INTO audit(id,tenant_id,actor,action,created_at) VALUES (?,?,?,?,?)').run(randomUUID(),s.tenant,user.email,'导出充值核对记录：'+environment+' / '+dates.from+' / '+dates.to+' / '+rows.length+' 条',new Date().toISOString());
   const headers=['平台订单号','会员','充值通道','外部／核对编号','环境','币种','充值金额（分）','入账金额（分）','状态','建单结果','需复核','创建时间（UTC）','核验时间（UTC）','入账时间（UTC）'];
   const lines=rows.map(publicOrder).map(r=>[r.id,r.member,r.provider,r.providerOrderId,r.environment,r.currency,r.amountMinor,r.creditedMinor,r.status,r.creationStatus,r.reviewRequired?'是':'否',r.createdAt,r.verifiedAt,r.creditedAt].map(csvCell).join(','));
-  return new Response('\ufeff'+[headers.map(csvCell).join(','),...lines].join('\r\n'),{headers:{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="master7-deposit-records.csv"'}});
+  return new Response('\ufeff'+[headers.map(csvCell).join(','),...lines].join('\r\n'),{headers:{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="master7-reconciliation-records.csv"'}});
  }
  const totals=await sql.prepare('SELECT count(*) AS orders,CAST(COALESCE(SUM(o.amount_minor),0) AS TEXT) AS ordered_minor,CAST(COALESCE(SUM(j.member_minor),0) AS TEXT) AS credited_minor,COALESCE(SUM(CASE WHEN o.review_required=1 THEN 1 ELSE 0 END),0) AS review_orders FROM portal_payment_orders o LEFT JOIN portal_wallet_journal j ON j.order_id=o.id WHERE '+where).get(...values);
  const page=rows.slice(0,100),last=page.at(-1),ids=page.map(r=>r.id);
