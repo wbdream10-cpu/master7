@@ -8,6 +8,7 @@ import {digest,secret,passwordValid,hashPassword,verifyPassword,limited,sessionU
 import * as api from './dist/api.mjs';
 import {listConnections,configureConnection,receiveEvent,listEvents} from './connections.mjs';
 import {getDepositRequests,createDepositRequest} from './deposit.mjs';
+import {createPaymentChannelsHandler} from './payment-channels.mjs';
 const origin=new URL(process.env.PUBLIC_ORIGIN||'http://127.0.0.1:8080');
 if(origin.protocol!=='https:'&&!['127.0.0.1','localhost','[::1]'].includes(origin.hostname))throw Error('PUBLIC_ORIGIN must use HTTPS outside local development.');
 const cookieFlags='; Path=/; HttpOnly; SameSite=Lax'+(origin.protocol==='https:'?'; Secure':'');
@@ -18,6 +19,19 @@ function authPage(kind,message='',status=200){const register=kind==='register',r
 function recoveryPage(code,reset=false){return page('保存账号恢复码',`<main class="auth-card"><h1>${reset?'密码已重设':'注册已提交'}</h1><p>请离线保存以下恢复码。它只显示这一次，持有者可以重设你的密码。不要发送给客服或其他人。</p><code class="recovery">${escape(code)}</code><p>${reset?'旧恢复码和所有旧登录会话已失效。下次请使用此新恢复码。':'账号还需老板核实并批准，恢复码不会再次显示。'}</p><a class="primary" href="/signin">返回登录</a></main>`)}
 const redirect=(path,cookie)=>new Response(null,{status:303,headers:{location:path,...(cookie?{'set-cookie':cookie}:{})}});
 const json=(data,status=200)=>Response.json(data,{status});
+const getPaymentChannels=createPaymentChannelsHandler({
+ getMemberTenant:email=>withStorage(async()=>{const member=await sql.prepare('SELECT tenant_id FROM members WHERE email=?').get(email);return member?.tenant_id||null;}),
+ tenantExists:id=>withStorage(async()=>Boolean(await sql.prepare('SELECT id FROM brands WHERE id=?').get(id))),
+});
+async function dispatch(req){
+ const url=new URL(req.url,origin);
+ if(url.pathname==='/api/v1/payment-channels'){
+  if(req.method!=='GET')return json({error:'Method not allowed'},405);
+  const user=await withStorage(()=>sessionUser(req.headers.cookie));
+  return getPaymentChannels(user,url.searchParams.get('tenant'));
+ }
+ return withStorage(()=>handle(req));
+}
 async function bodyOf(req){if(req.portalBody)return req.portalBody;let size=0;const chunks=[];for await(const c of req){size+=c.length;if(size>16384)throw Error('TOO_LARGE');chunks.push(c)}return Buffer.concat(chunks)}
 async function log(user,action){(await sql.prepare('INSERT INTO audit(id,tenant_id,actor,action,created_at) VALUES (?,?,?,?,?)').run(randomUUID(),user.tenantId||'main',user.email,action,new Date().toISOString()))}
 async function accountsPage(user){const head=user.role==='owner';const users=(await sql.prepare(`SELECT u.id,u.username,u.email,u.role,u.approved,p.role AS staff_role,COALESCE(p.tenant_id,m.tenant_id,'main') AS tenant_id FROM portal_users u LEFT JOIN portal_staff p ON p.user_id=u.id LEFT JOIN members m ON m.email=u.email ${head?'':"WHERE u.role<>'owner' AND COALESCE(p.tenant_id,m.tenant_id,'main')=?"} ORDER BY u.created_at DESC LIMIT 300`).all(...(head?[]:[user.tenantId])));return page('账号与租户管理',`<main class="accounts"><div class="page-heading"><div><p class="eyebrow">ACCOUNT MANAGEMENT</p><h1>${head?'总部账号与租户管理':'本租户账号管理'}</h1></div><a class="secondary" href="/admin">返回后台</a></div>${head?`<section class="account-row"><h2>创建空白租户</h2><form class="settings-form" method="post" action="/accounts/tenant"><label>租户代码<input name="tenantId" required pattern="[a-z0-9][a-z0-9_-]{2,39}" maxlength="40"></label><button class="primary">创建租户</button><p>仅创建空白工作空间，不导入账号或内容。</p></form></section>`:''}${users.map(u=>`<section class="account-row"><b>${escape(u.username)}</b><p>${escape(u.email)} · ${escape(u.tenant_id)} · ${escape(u.role==='owner'?'总部':u.staff_role==='tenant_owner'?'租户老板':u.staff_role==='employee'?'员工':'客户')} · ${u.approved?'已批准':'等待批准'}</p>${u.role!=='owner'&&(head||!u.staff_role)?`<form method="post" action="/accounts/${u.approved?'suspend':'approve'}"><input type="hidden" name="id" value="${escape(u.id)}"><button class="secondary">${u.approved?'暂停并撤销登录':'批准账号'}</button></form>`:''}${head&&u.role!=='owner'?`<form class="settings-form" method="post" action="/accounts/role"><input type="hidden" name="id" value="${escape(u.id)}"><label>租户代码<input name="tenantId" value="${escape(u.tenant_id)}" required maxlength="60"></label><label>职责<select name="role"><option value="customer" ${!u.staff_role?'selected':''}>客户</option><option value="tenant_owner" ${u.staff_role==='tenant_owner'?'selected':''}>租户老板</option><option value="employee" ${u.staff_role==='employee'?'selected':''}>员工</option></select></label><button class="secondary">保存归属与职责并撤销旧登录</button><p>已明确归属其他租户的账号不能直接转移。</p></form>`:''}</section>`).join('')}</main>`)}
@@ -74,7 +88,10 @@ async function handle(req){const url=new URL(req.url,origin);const user=(await s
   if(method==='GET'&&url.pathname==='/connections')return (await connectionsPage());
   return json({error:'Not found'},404);
  }
- if(method==='GET'&&url.pathname==='/health')return json({status:'ok',authentication:'platform-password',externalServices:false});
+ if(method==='GET'&&url.pathname==='/health'){
+  try{await sql.prepare('SELECT 1 AS ready').get();return json({status:'ok',database:'ready',scope:'database_readiness',authentication:'platform-password',externalServices:false,release:process.env.RENDER_GIT_COMMIT||'local'});}
+  catch{return json({status:'unavailable',database:'unavailable',scope:'database_readiness',externalServices:false},503);}
+ }
  if(method==='GET'&&(url.pathname.startsWith('/assets/')||url.pathname==='/brand/master7-logo.jpg')){const name={'/brand/master7-logo.jpg':['master7-logo.jpg','image/jpeg'],'/assets/client.js':['client.js','text/javascript; charset=utf-8'],'/assets/portal.css':['portal.css','text/css; charset=utf-8']}[url.pathname];return name?new Response(readFileSync(resolve('standalone/dist',name[0])),{headers:{'content-type':name[1]}}):new Response('Not found',{status:404})}
  if(method==='GET'&&['/signin','/register','/reset'].includes(url.pathname))return authPage(url.pathname.slice(1));
  if(method==='POST'&&url.pathname.startsWith('/auth/')){
@@ -140,7 +157,7 @@ async function handle(req){const url=new URL(req.url,origin);const user=(await s
  }
  return new Response('Not found',{status:404});
 }
-export const server=createServer(async(req,res)=>{let response;try{if(req.method==='POST')req.portalBody=await bodyOf(req);response=await withStorage(()=>handle(req))}catch(e){console.error('Request failed:',e.message==='TOO_LARGE'?'body too large':'internal error');response=json({error:e.message==='TOO_LARGE'?'请求内容过长':'服务暂时无法处理，请稍后重试。'},e.message==='TOO_LARGE'?413:500)}
+export const server=createServer(async(req,res)=>{let response;try{if(req.method==='POST')req.portalBody=await bodyOf(req);response=await dispatch(req)}catch(e){console.error('Request failed:',e.message==='TOO_LARGE'?'body too large':'internal error');response=json({error:e.message==='TOO_LARGE'?'请求内容过长':'服务暂时无法处理，请稍后重试。'},e.message==='TOO_LARGE'?413:500)}
  // Native same-origin form POSTs must retain Origin for the strict source check above.
  const headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'same-origin','X-Frame-Options':'DENY','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; frame-ancestors 'none'; form-action 'self'; base-uri 'none'; connect-src 'self'"};if(origin.protocol==='https:')headers['Strict-Transport-Security']='max-age=31536000';response.headers.forEach((v,k)=>headers[k]=v);res.writeHead(response.status,headers);res.end(Buffer.from(await response.arrayBuffer()));});
 server.requestTimeout=30000;server.headersTimeout=15000;

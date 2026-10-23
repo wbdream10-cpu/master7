@@ -11,15 +11,21 @@ if(postgresTest)process.env.PORTAL_TEST_POSTGRES='1';else delete process.env.POR
 const dir=mkdtempSync(join(tmpdir(),'portal-test-'));process.env.PORTAL_DATABASE=join(dir,'portal.sqlite');process.env.PUBLIC_ORIGIN='http://127.0.0.1:8080';
 if(postgresTest)process.env.PORTAL_TEST_POSTGRES_PATH=join(dir,'pgdata');
 const password='Test-only-password-7823';let ownerRecovery='';
+const nativeFetch=globalThis.fetch;let gatewayStatusReads=0;
+globalThis.fetch=(input,options)=>input==='https://master7-integration-gateway.onrender.com/providers/vpay/status'?(gatewayStatusReads++,Promise.resolve(Response.json({provider:'vpay',version:'1.7.0',mode:'uat',configured:true,readiness:{channels:{payment:{configurationReady:false,liveReady:false}}}}))):nativeFetch(input,options);
 await new Promise((resolve,reject)=>{const child=spawn(process.execPath,['standalone/admin.mjs','create-owner','owner','owner@example.test'],{env:process.env,stdio:['pipe','pipe','pipe']});let out='',err='';child.stdout.on('data',d=>out+=d);child.stderr.on('data',d=>err+=d);child.on('close',code=>{if(code)return reject(Error(err));ownerRecovery=out.trim().split('\n').at(-1);resolve()});child.stdin.end(password+'\n')});
 const {server}=await import('./server.mjs');await new Promise(r=>server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+server.address().port;
 const req=(path,opt={})=>fetch(base+path,{redirect:'manual',...opt});
 const form=(path,data,cookie='',origin=process.env.PUBLIC_ORIGIN)=>req(path,{method:'POST',headers:{origin,'content-type':'application/x-www-form-urlencoded',cookie},body:new URLSearchParams(data)});
 const post=(data,cookie='',tenant='')=>req('/api/portal'+(tenant?'?tenant='+tenant:''),{method:'POST',headers:{origin:process.env.PUBLIC_ORIGIN,'content-type':'application/json','x-portal-request':'1',cookie},body:JSON.stringify(data)});
 const get=(cookie='',tenant='')=>req('/api/portal'+(tenant?'?tenant='+tenant:''),{headers:{cookie}});
+const paymentChannels=(cookie='',tenant='')=>req('/api/v1/payment-channels'+(tenant?'?tenant='+tenant:''),{headers:{cookie}});
 const session=r=>r.headers.get('set-cookie').split(';')[0];
 try{
  assert.equal((await req('/')).status,303);assert.equal((await req('/admin')).status,303);assert.equal((await get()).status,401);assert.equal((await req('/health')).status,200);
+ assert.equal((await paymentChannels()).status,401);assert.equal(gatewayStatusReads,0);
+ assert.equal((await req('/api/v1/payment-channels',{method:'POST'})).status,405);
+ const health=await (await req('/health')).json();assert.equal(health.database,'ready');assert.equal(health.scope,'database_readiness');assert.equal(health.externalServices,false);
  assert.equal((await req('/signin')).headers.get('referrer-policy'),'same-origin');
  assert((await (await req('/signin')).text()).includes('src="/brand/master7-logo.jpg"'));
  const logoAsset=await req('/brand/master7-logo.jpg');assert.equal(logoAsset.status,200);assert.equal(logoAsset.headers.get('content-type'),'image/jpeg');assert.deepEqual(Buffer.from(await logoAsset.arrayBuffer()),readFileSync('public/brand/master7-logo.jpg'));
@@ -31,6 +37,7 @@ try{
  assert.equal((await form('/auth/login',{username:'alice',password})).status,401);
  r=await form('/auth/login',{username:'owner',password});assert.equal(r.status,303);const ownerCookie=session(r);assert(r.headers.get('set-cookie').includes('HttpOnly'));assert(r.headers.get('set-cookie').includes('SameSite=Lax'));
  const initial=await (await get(ownerCookie)).json();assert.equal(initial.brand.name,'MASTER7');assert.equal(initial.notices.length,0);assert.equal(initial.tickets.length,0);assert.equal(initial.audit.length,0);assert.equal(initial.members.length,0);
+ const channelStatus=await (await paymentChannels(ownerCookie)).json();assert.equal(channelStatus.tenantId,'main');assert.equal(channelStatus.channels.length,3);assert(channelStatus.channels.every(channel=>channel.enabled===false));assert.equal(channelStatus.fundsProcessed,false);assert.equal(channelStatus.diagnostics.gateway.mode,'uat');assert.equal(channelStatus.diagnostics.gateway.configured,true);assert.equal(channelStatus.diagnostics.gateway.liveReady,false);assert(gatewayStatusReads>0);
  assert.equal((await post({action:'save-logo',logo:'http://invalid.test/logo.png'},ownerCookie)).status,400);
  assert.equal((await post({action:'save-logo',logo:'https://example.test/logo.png',name:'Must stay unchanged',color:'#000000'},ownerCookie)).status,200);
  const branded=await (await get(ownerCookie)).json();assert.equal(branded.brand.logo,'https://example.test/logo.png');assert.equal(branded.brand.name,initial.brand.name);assert.equal(branded.brand.color,initial.brand.color);
@@ -54,6 +61,7 @@ try{
  const alice=(await sql.prepare("SELECT * FROM portal_users WHERE username='alice'").get());assert.notEqual(alice.password_hash,password);assert.notEqual(alice.recovery_hash,aliceRecovery);
  assert.equal((await form('/accounts/approve',{id:alice.id},ownerCookie)).status,303);
  r=await form('/auth/login',{username:'alice',password});assert.equal(r.status,303);const aliceCookie=session(r);
+ const memberChannels=await (await paymentChannels(aliceCookie)).json();assert.equal(memberChannels.diagnostics,undefined);assert(memberChannels.channels.every(channel=>channel.status==='not_open'&&channel.enabled===false));assert.equal(memberChannels.fundsProcessed,false);
  assert.deepEqual(brandFields((await (await get(aliceCookie)).json()).brand),brandSettings);
  const depositPost=(cookie,data,tenant='')=>req('/api/v1/deposit-requests'+(tenant?'?tenant='+tenant:''),{method:'POST',headers:{origin:process.env.PUBLIC_ORIGIN,'content-type':'application/json','x-portal-request':'1',cookie},body:JSON.stringify(data)});
  const depositGet=(cookie,tenant='')=>req('/api/v1/deposit-requests'+(tenant?'?tenant='+tenant:''),{headers:{cookie}});
@@ -134,6 +142,8 @@ try{
  assert.equal((await depositGet(staffCookie)).status,403);assert.equal((await depositPost(staffCookie,depositPayload)).status,403);
  assert.equal((await (await depositGet(ownerCookie,'alpha')).json()).requests.length,1);
  const scoped=await (await get(tenantBossCookie)).json();assert.equal(scoped.tenantId,'alpha');assert.equal(scoped.user.role,'tenant_owner');assert.equal(scoped.tenants.length,0);
+ assert.equal((await paymentChannels(staffCookie)).status,403);assert.equal((await paymentChannels(tenantBossCookie,'beta')).status,403);assert.equal((await paymentChannels(tenantClientCookie,'beta')).status,403);assert.equal((await paymentChannels(ownerCookie,'missing')).status,404);
+ const tenantChannels=await (await paymentChannels(tenantBossCookie)).json();assert.equal(tenantChannels.tenantId,'alpha');assert.equal(tenantChannels.diagnostics,undefined);assert(tenantChannels.channels.every(channel=>channel.enabled===false));
  assert.equal((await get(tenantBossCookie,'beta')).status,403);assert.equal((await get(staffCookie,'beta')).status,403);
  assert.equal((await post({action:'save-notice',title:'No',body:'No',published:true},tenantBossCookie,'beta')).status,403);
  assert.equal((await post({action:'create-brand',name:'No'},tenantBossCookie)).status,403);
@@ -183,5 +193,6 @@ try{
    const child=spawn(process.execPath,['--input-type=module','-e',code],{env:{...process.env,PORTAL_EXPECTED_TEST_TICKETS:String(expected)},stdio:['ignore','ignore','pipe']});let error='';child.stderr.on('data',d=>error+=d);child.on('close',status=>status?reject(Error(error)):resolve());child.on('error',reject);
   });
  }
- console.log('PASS ['+(postgresTest?'PostgreSQL/PGlite':'SQLite')+']: real local HTTP registration/pending approval/login; owner approval; password hashing; session cookie security; unauthenticated rejection; customer/admin separation; request/reply persistence; tenant isolation; recovery rotation and session revocation; logout; suspension; expired sessions; CSP; built assets; headquarters provisioning; tenant owner isolation; employee restrictions; cross-tenant denial; role-change session revocation; Deposit request validation, exact minor units, idempotency and isolation; password change, old-session invalidation and recovery rotation; brand settings persistence, member visibility, legacy compatibility, validation, audit and tenant permissions. Temporary test database only.');
+ await sql.close();assert.equal((await req('/health')).status,503);
+ console.log('PASS ['+(postgresTest?'PostgreSQL/PGlite':'SQLite')+']: real local HTTP registration/pending approval/login; owner approval; password hashing; session cookie security; unauthenticated rejection; customer/admin separation; request/reply persistence; tenant isolation; recovery rotation and session revocation; logout; suspension; expired sessions; CSP; built assets; headquarters provisioning; tenant owner isolation; employee restrictions; cross-tenant denial; role-change session revocation; Deposit request validation, exact minor units, idempotency and isolation; password change, old-session invalidation and recovery rotation; brand settings persistence, member visibility, legacy compatibility, validation, audit and tenant permissions; database readiness and unavailable response. Temporary test database only.');
 }finally{await new Promise(r=>server.close(r));const {sql}=await import('./runtime.mjs');(await sql.close());rmSync(dir,{recursive:true,force:true});}
