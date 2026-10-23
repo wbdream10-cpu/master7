@@ -165,14 +165,15 @@ test('database constraints reject unbalanced credits and duplicate credits for a
  await assert.rejects(withStorage(()=>sql.prepare('INSERT INTO portal_wallet_journal VALUES (?,?,?,?,?,?,?,?,?)').run('duplicate-credit',order.id,'alpha','alice','uat','MYR',1234,-1234,at)));
 });
 
-test('production verification reads only the fixed gateway status and order-query endpoints and rejects an environment mismatch',async()=>{
- const calls=[],order={id:'synthetic_order',trade_no:'provider_synthetic_order'};
+test('verification reads authenticated fixed gateway configuration and order query and rejects an environment mismatch',async()=>{
+ const calls=[],order={id:'synthetic_order',trade_no:'provider_synthetic_order',merchant_id:'123456'};
  const verifier=createVPayOrderVerifier({token:'synthetic-admin-query-token-minimum-32-bytes',environment:'uat',fetchImpl:async(url,options)=>{
   calls.push({url,options});
-  return Response.json(url.endsWith('/status')?{provider:'vpay',mode:'uat',configured:true}:{provider:'vpay',upstreamStatus:200,result:{code:0,data:{}}});
+  return Response.json(url.endsWith('/config')?{provider:'vpay',traderId:'123456',mode:'uat',configured:true}:{provider:'vpay',upstreamStatus:200,result:{code:0,data:{}}});
  }});
  assert.deepEqual(await verifier(order),{code:0,data:{}});assert.equal(calls.length,2);assert(calls.every(r=>r.url.startsWith('https://master7-integration-gateway.onrender.com/')));
  assert.equal(calls[1].url.endsWith('/platform/vpay/order-query'),true);assert.equal(calls[1].options.redirect,'error');assert.deepEqual(JSON.parse(calls[1].options.body),{outTradeNo:order.id,tradeNo:order.trade_no});
+ assert(calls.every(call=>call.options.headers.Authorization==='Bearer synthetic-admin-query-token-minimum-32-bytes'));
  const wrong=createVPayOrderVerifier({token:'synthetic-query-token-at-least-32-bytes',environment:'production',fetchImpl:async()=>Response.json({provider:'vpay',mode:'uat',configured:true})});
  await assert.rejects(wrong(order),/ENVIRONMENT_UNCONFIRMED/);
 });

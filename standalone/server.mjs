@@ -10,6 +10,7 @@ import {listConnections,configureConnection,receiveEvent,listEvents} from './con
 import {getDepositRequests,createDepositRequest} from './deposit.mjs';
 import {createPaymentChannelsHandler} from './payment-channels.mjs';
 import {createVPaySettlement,getWallet,getPaymentRecords} from './wallet.mjs';
+import {createVPayCheckout} from './vpay-checkout.mjs';
 const origin=new URL(process.env.PUBLIC_ORIGIN||'http://127.0.0.1:8080');
 if(origin.protocol!=='https:'&&!['127.0.0.1','localhost','[::1]'].includes(origin.hostname))throw Error('PUBLIC_ORIGIN must use HTTPS outside local development.');
 const cookieFlags='; Path=/; HttpOnly; SameSite=Lax'+(origin.protocol==='https:'?'; Secure':'');
@@ -25,8 +26,20 @@ const getPaymentChannels=createPaymentChannelsHandler({
  tenantExists:id=>withStorage(async()=>Boolean(await sql.prepare('SELECT id FROM brands WHERE id=?').get(id))),
 });
 const vpaySettlement=createVPaySettlement();
+const vpayCheckout=createVPayCheckout({settlement:vpaySettlement});
 async function dispatch(req){
  const url=new URL(req.url,origin);
+ if(['/api/v1/payments/vpay/config','/api/v1/payments/vpay/orders'].includes(url.pathname)){
+  const user=await withStorage(()=>sessionUser(req.headers.cookie));
+  if(url.pathname.endsWith('/config'))return req.method==='GET'?vpayCheckout.publicStatus(user):json({error:'Method not allowed'},405);
+  if(req.method!=='POST')return json({error:'Method not allowed'},405);
+  if(!user)return json({error:'请先登录'},401);
+  if(req.headers.origin!==origin.origin)return json({error:'请求来源不受信任'},403);
+  if(req.headers['x-portal-request']!=='1'||!String(req.headers['content-type']).startsWith('application/json'))return json({error:'请求格式错误'},415);
+  let data;try{data=JSON.parse((await bodyOf(req)).toString('utf8'));}catch{return json({error:'请求格式错误'},400);}
+  // Supplier network calls must not hold the application's global DB queue.
+  return vpayCheckout.submit(user,data);
+ }
  if(url.pathname==='/api/v1/payment-callbacks/vpay/payment'){
   if(req.method!=='POST')return json({error:'Method not allowed'},405);
   if(!String(req.headers['content-type']).startsWith('application/json'))return json({error:'JSON required'},415);
@@ -45,6 +58,11 @@ async function accountsPage(user){const head=user.role==='owner';const users=(aw
 async function connectionsPage(){const rows=(await listConnections()),events=(await listEvents());return page('通用接口管理',`<main class="accounts"><div class="page-heading"><div><p class="eyebrow">OWNER / CONNECTIONS</p><h1>通用接口管理</h1><p>未配置任何外部服务。接收记录不代表业务已处理。</p></div><a class="secondary" href="/admin">返回老板后台</a></div><section class="account-row"><h2>配置接收通道</h2><form class="settings-form" method="post" action="/connections"><label>连接标识<input name="id" required pattern="[a-z0-9][a-z0-9_-]{2,39}" maxlength="40"></label><label>工作空间 ID<input name="tenantId" required value="main" maxlength="60"></label><label>签名密钥的环境变量名<input name="keyEnv" required pattern="PORTAL_HOOK_[A-Z0-9_]{3,60}" maxlength="72" placeholder="PORTAL_HOOK_..." autocomplete="off"></label><p>这里只填写环境变量名称，密钥由部署负责人在服务器设置，至少 32 字节。</p><label><input type="checkbox" name="enabled"> 启用接收</label><button class="primary">保存连接</button></form></section><section class="account-row"><h2>已配置连接</h2>${rows.length?rows.map(c=>`<div class="account-row"><b>${escape(c.id)}</b><p>${escape(c.tenantId)} · ${c.enabled?'已启用':'已停用'} · ${c.configured?'密钥已配置':'缺少密钥'}</p><code>${escape(c.callbackPath)}</code><p>密钥变量：${escape(c.keyEnv)}</p><form method="post" action="/connections"><input type="hidden" name="id" value="${escape(c.id)}"><input type="hidden" name="tenantId" value="${escape(c.tenantId)}"><input type="hidden" name="keyEnv" value="${escape(c.keyEnv)}">${c.enabled?'':'<input type="hidden" name="enabled" value="on">'}<button class="secondary">${c.enabled?'停用连接':'启用连接'}</button></form></div>`).join(''):'<p>暂无连接。</p>'}</section><section class="account-row"><h2>最近收到的事件</h2><p>仅显示事件元数据，原始内容不会在这里公开。事件仍待接手人员编写适配器处理。</p>${events.length?events.map(e=>`<div class="account-row"><b>${escape(e.type)}</b><p>${escape(e.connectionId)} · ${escape(e.tenantId)} · ${escape(e.receivedAt)}</p><code>${escape(e.eventId)}</code><p>已接收 / 未处理</p></div>`).join(''):'<p>暂无事件。</p>'}</section></main>`)}
 async function handle(req){const url=new URL(req.url,origin);const user=(await sessionUser(req.headers.cookie));const method=req.method||'GET';
  if(method==='POST'&&!url.pathname.startsWith('/api/v1/hooks/')&&req.headers.origin!==origin.origin)return json({error:'请求来源不受信任'},403);
+ if(url.pathname==='/payment-return'){
+  if(method!=='GET')return json({error:'Method not allowed'},405);
+  if(!user)return redirect('/signin');
+  return page('付款结果核验',`<main class="auth-card"><h1>正在核对付款结果</h1><p>付款结果以钱包与充值记录为准。页面跳转不会增加余额；如仍在处理中，请稍后刷新记录。</p><a class="primary" href="/">返回会员中心查看充值记录</a></main>`);
+ }
  if(['/api/v1/wallet','/api/v1/payment-records','/api/v1/payment-records/export'].includes(url.pathname)){
   if(method!=='GET')return json({error:'Method not allowed'},405);
   if(url.pathname==='/api/v1/wallet')return getWallet(user,url.searchParams.get('tenant'),url.searchParams.get('environment')||'production');

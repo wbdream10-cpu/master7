@@ -71,9 +71,14 @@ export function createVPaySettlement({env=process.env,verifyOrder,now=()=>new Da
   if(!Buffer.isBuffer(raw)||raw.length>16384)return json({error:'VPAY_INVALID_CALLBACK'},400);
   let payload;try{payload=JSON.parse(raw.toString('utf8'));}catch{return json({error:'VPAY_INVALID_CALLBACK'},400);}
   if(!payload||Array.isArray(payload)||typeof payload!=='object'||!identifier(payload.out_trade_no)||payload.trader_id!==trader)return json({error:'VPAY_INVALID_CALLBACK'},400);
-  const order=await find(payload.out_trade_no);
+  let order=await find(payload.out_trade_no);
   if(!order)return json({error:'VPAY_ORDER_UNKNOWN'},409);
-  if(!order.trade_no)return json({error:'VPAY_ORDER_AWAITING_CONFIRMATION'},503);
+  if(!order.trade_no){
+   if(!['in_flight','unknown'].includes(order.create_outcome)||typeof payload.trade_no!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(payload.trade_no))return json({error:'VPAY_ORDER_AWAITING_CONFIRMATION'},503);
+   // Provisional reference: the authenticated query must match the reserved
+   // order and exact amount before it can be bound or credited.
+   order={...order,trade_no:payload.trade_no};
+  }
   let notification;
   try{notification=inspectVPayNotification(payload,expected(order));}catch(e){
    if(!(e instanceof VPayContractError))throw e;
@@ -105,7 +110,7 @@ export function createVPaySettlement({env=process.env,verifyOrder,now=()=>new Da
      return json({error:'VPAY_RECONCILIATION_REQUIRED'},503);
     }
     // The conditional write serializes concurrent workers on this order as well.
-    const changed=await sql.prepare("UPDATE portal_payment_orders SET settlement_status='credited',verified_at=?,credited_at=? WHERE id=? AND settlement_status='pending' AND review_required=0 AND trade_no=? AND merchant_id=? AND environment=?").run(at,at,order.id,order.trade_no,trader,environment);
+    const changed=await sql.prepare("UPDATE portal_payment_orders SET settlement_status='credited',trade_no=?,create_outcome='created',verified_at=?,credited_at=? WHERE id=? AND review_required=0 AND merchant_id=? AND environment=? AND ((settlement_status='pending' AND trade_no=?) OR (settlement_status='created' AND trade_no IS NULL AND create_outcome IN ('in_flight','unknown')))").run(order.trade_no,at,at,order.id,trader,environment,order.trade_no);
     if(!changed.changes){
      const current=await find(order.id),done=current?.settlement_status==='credited'&&!current.review_required&&await hasCredit(current);
      await sql.exec('ROLLBACK');return done?success():json({error:'VPAY_SETTLEMENT_CONFLICT'},503);
@@ -119,7 +124,7 @@ export function createVPaySettlement({env=process.env,verifyOrder,now=()=>new Da
    }
   });
  }
- return {reserveForMember,bindCreatedOrder,receive};
+ return {reserveForMember,bindCreatedOrder,receive,noteCreationPending:(order,evidence)=>review(order,'VPAY_ORDER_CREATION_PENDING',evidence,{hold:false})};
 }
 
 async function access(user,selected,managerOnly=false){
@@ -146,7 +151,7 @@ function range(params){
  if(!valid(from)||!valid(to)||to<from||Date.parse(to)-Date.parse(from)>30*86400000)return null;
  return {from:from+'T00:00:00.000Z',to:new Date(Date.parse(to+'T00:00:00Z')+86400000).toISOString()};
 }
-const publicOrder=row=>({id:row.id,tenantId:row.tenant_id,member:row.username,provider:'vpay',providerOrderId:row.trade_no,environment:row.environment,currency:row.currency,amountMinor:String(row.amount_minor),creditedMinor:String(row.member_minor||0),status:row.settlement_status,reviewRequired:!!row.review_required,reviewCount:Number(row.review_count),createdAt:row.created_at,verifiedAt:row.verified_at,creditedAt:row.credited_at});
+const publicOrder=row=>({id:row.id,tenantId:row.tenant_id,member:row.username,provider:'vpay',providerOrderId:row.trade_no,environment:row.environment,currency:row.currency,amountMinor:String(row.amount_minor),creditedMinor:String(row.member_minor||0),status:row.settlement_status,creationStatus:row.create_outcome,reviewRequired:!!row.review_required,reviewCount:Number(row.review_count),createdAt:row.created_at,verifiedAt:row.verified_at,creditedAt:row.credited_at});
 const csvCell=value=>'"'+String(value??'').replace(/^[\u0000-\u0020]*[=+@\-]/,"'$&").replace(/"/g,'""')+'"';
 export async function getPaymentRecords(user,params,{exportCSV=false}={}){
  const s=await access(user,params.get('tenant'),exportCSV);if(s.error)return s.error;
@@ -169,8 +174,8 @@ export async function getPaymentRecords(user,params,{exportCSV=false}={}){
  if(exportCSV){
   if(rows.length>10000)return json({error:'记录超过 10000 条，请缩短导出日期范围'},413);
   await sql.prepare('INSERT INTO audit(id,tenant_id,actor,action,created_at) VALUES (?,?,?,?,?)').run(randomUUID(),s.tenant,user.email,'导出 VPay 充值核对记录：'+environment+' / '+dates.from+' / '+dates.to+' / '+rows.length+' 条',new Date().toISOString());
-  const headers=['平台订单号','会员','VPay订单号','环境','币种','充值金额（分）','入账金额（分）','状态','需复核','创建时间（UTC）','核验时间（UTC）','入账时间（UTC）'];
-  const lines=rows.map(publicOrder).map(r=>[r.id,r.member,r.providerOrderId,r.environment,r.currency,r.amountMinor,r.creditedMinor,r.status,r.reviewRequired?'是':'否',r.createdAt,r.verifiedAt,r.creditedAt].map(csvCell).join(','));
+  const headers=['平台订单号','会员','VPay订单号','环境','币种','充值金额（分）','入账金额（分）','状态','建单结果','需复核','创建时间（UTC）','核验时间（UTC）','入账时间（UTC）'];
+  const lines=rows.map(publicOrder).map(r=>[r.id,r.member,r.providerOrderId,r.environment,r.currency,r.amountMinor,r.creditedMinor,r.status,r.creationStatus,r.reviewRequired?'是':'否',r.createdAt,r.verifiedAt,r.creditedAt].map(csvCell).join(','));
   return new Response('\ufeff'+[headers.map(csvCell).join(','),...lines].join('\r\n'),{headers:{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':'attachment; filename="master7-vpay-records.csv"'}});
  }
  const totals=await sql.prepare('SELECT count(*) AS orders,CAST(COALESCE(SUM(o.amount_minor),0) AS TEXT) AS ordered_minor,CAST(COALESCE(SUM(j.member_minor),0) AS TEXT) AS credited_minor,COALESCE(SUM(CASE WHEN o.review_required=1 THEN 1 ELSE 0 END),0) AS review_orders FROM portal_payment_orders o LEFT JOIN portal_wallet_journal j ON j.order_id=o.id WHERE '+where).get(...values);
