@@ -119,6 +119,41 @@ test('finance permission is explicit, tenant-scoped and cannot configure banking
  assert.equal((await bank.list(employee)).status,403);assert.equal((await bank.review(employee,null,first.id,{decision:'approve',bankVerified:true,reviewKey:'ordinary_employee_review'})).status,403);
 });
 
+test('finance queue uses pending-first keyset pagination and binds cursors to validated filters',async()=>{
+ const ids=[];
+ try{
+  for(let index=0;index<55;index++){
+   const id='queue-pending-'+String(index).padStart(2,'0'),at=new Date(fixed.getTime()-index*1000).toISOString();ids.push(id);
+   await sql.prepare(`INSERT INTO portal_bank_deposits(id,tenant_id,user_id,request_key,request_fingerprint,amount_minor,currency,payer_name,transfer_reference,transferred_at,
+    recipient_bank_name,recipient_account_holder,recipient_account_number,bank_config_updated_at,status,created_at)
+    VALUES (?,'alpha','alice',?,?,?,'MYR','ALICE SYNTHETIC',?,?,'Synthetic Bank','MASTER7 SYNTHETIC','1234',?,'awaiting_review',?)`)
+    .run(id,'queue_request_pending_'+String(index).padStart(4,'0'),'a'.repeat(64),100+index,'QUEUE-PENDING-'+index,at,createdAt,at);
+  }
+  const rejectedId='queue-rejected-newer',rejectedAt=new Date(fixed.getTime()+60000).toISOString();ids.push(rejectedId);
+  await sql.prepare(`INSERT INTO portal_bank_deposits(id,tenant_id,user_id,request_key,request_fingerprint,amount_minor,currency,payer_name,transfer_reference,transferred_at,
+   recipient_bank_name,recipient_account_holder,recipient_account_number,bank_config_updated_at,status,review_request_key,review_fingerprint,review_decision,review_reason,reviewed_by,reviewed_at,created_at)
+   VALUES (?,'alpha','alice','queue_request_rejected_0001',?,999,'MYR','ALICE SYNTHETIC','QUEUE-REJECTED',?,'Synthetic Bank','MASTER7 SYNTHETIC','1234',?,'rejected','queue_review_rejected_0001',?,'reject','Synthetic rejection','boss',?,?)`)
+   .run(rejectedId,'b'.repeat(64),rejectedAt,createdAt,'c'.repeat(64),rejectedAt,rejectedAt);
+
+  const firstPage=await body(await bank.list(finance,null,new URLSearchParams()));
+  assert.equal(firstPage.deposits.length,50);assert(firstPage.deposits.every(item=>item.status==='awaiting_review'),'newer completed rows must not hide pending work');
+  assert.equal(firstPage.summary.count,57);assert.equal(firstPage.summary.pendingCount,56);assert.equal(firstPage.filters.timeZone,'Asia/Kuching');assert(firstPage.nextCursor);
+  const secondPage=await body(await bank.list(finance,null,new URLSearchParams({cursor:firstPage.nextCursor})));
+  assert.equal(secondPage.deposits.length,7);assert.equal(secondPage.deposits.at(-1).id,rejectedId);assert.equal(secondPage.nextCursor,null);
+  assert.equal(new Set([...firstPage.deposits,...secondPage.deposits].map(item=>item.id)).size,57,'keyset pages must not overlap');
+
+  const rejected=await body(await bank.list(finance,null,new URLSearchParams({status:'rejected',member:'ALIce',from:'2026-10-23',to:'2026-10-23'})));
+  assert.deepEqual(rejected.deposits.map(item=>item.id),[rejectedId]);assert.deepEqual(rejected.summary,{count:1,amountMinor:'999',pendingCount:0,pendingAmountMinor:'0'});
+  assert.equal((await bank.list(finance,null,new URLSearchParams({status:'rejected',cursor:firstPage.nextCursor}))).status,400,'a cursor cannot be replayed under different filters');
+  const decoded=JSON.parse(Buffer.from(firstPage.nextCursor,'base64url').toString());decoded.filter='0'.repeat(64);
+  assert.equal((await bank.list(finance,null,new URLSearchParams({cursor:Buffer.from(JSON.stringify(decoded)).toString('base64url')}))).status,400,'tampered cursor metadata must be rejected');
+  assert.equal((await bank.list(finance,null,new URLSearchParams({from:'2026-09-01',to:'2026-10-23'}))).status,400);
+  const memberPage=await body(await bank.list(alice,null,new URLSearchParams({member:'someone-else'})));
+  assert.equal(memberPage.canReview,false);assert(memberPage.deposits.every(item=>item.member==='alice'),'member-controlled search must never widen ownership scope');
+  assert.equal(JSON.stringify(firstPage).includes('receipt_bytes'),false);
+ }finally{for(const id of ids)await sql.prepare('DELETE FROM portal_bank_deposits WHERE id=?').run(id);}
+});
+
 test('record lists and metrics never materialize private receipt BLOB columns',async()=>{
  const prepare=sql.prepare,observed=[];
  try{
