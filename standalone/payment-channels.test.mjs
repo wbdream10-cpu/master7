@@ -104,7 +104,7 @@ test('even fully ready production metadata cannot enable orders in this portal',
   assertClosed(data);
   assert.equal(data.diagnostics.gateway.mode, 'production');
   assert.equal(data.diagnostics.gateway.liveReady, true);
-  assert.equal(data.diagnostics.limitations.vpay, 'platform_settlement_not_implemented');
+  assert.equal(data.diagnostics.limitations.vpay, 'checkout_disabled_until_production_qa');
 });
 
 test('old or incomplete readiness fields stay unknown instead of becoming true', async () => {
