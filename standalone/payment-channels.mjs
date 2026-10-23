@@ -184,7 +184,7 @@ export function createPaymentChannelsHandler({
         ...source,
         limitations: {
           vpay: 'checkout_disabled_until_production_qa',
-          gspay_myr: 'adapter_not_implemented',
+          gspay_myr: 'offline_contract_verified_adapter_disabled',
           gspay_usdt: 'new_orders_stopped',
         },
       };

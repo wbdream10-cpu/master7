@@ -67,9 +67,9 @@ unset portal_password
 
 银行转账充值默认关闭且不预置真实银行资料。总部或租户老板可保存银行名称、户口名字和户口号码并决定是否开放；会员提交金额、付款人、银行交易编号、转账时间及最大 2 MiB 的 JPEG、PNG 或 WebP 单据。单据保存在私有数据库表，没有公开文件地址，仅本人、同租户老板、总部及明确获授权的财务员工可读。财务批准前必须在银行后台核实实际到账，并提交所查看单据的 SHA-256；批准事务只写入一次订单和钱包账本。系统不收集银行登录 ID、密码、OTP 或 Authenticator 动态码。今日财务概览按 Asia/Kuching 分列 VPay、GSPAY+ MYR、银行转账、待审核、已入账、提现和新注册；未接通的 GSPAY+ MYR 与提现固定显示未开放和零数据。相关接口与回归测试集中在 `standalone/bank-deposits.mjs`、`standalone/bank-deposits.test.mjs` 和 `standalone/bank-deposits-http.test.mjs`。
 
-Deposit 页新增独立 VPay 建单表单，默认关闭；GSPAY+ MYR 与 USDT 保留未开放的入口，USDT 不接收新订单。服务端只读查询固定 VPay 网关状态，总部后台可查看脱敏的检查结果；配置资料存在或网关报告就绪均不会自动开启本平台结算。普通会员不接收诊断详情，USDT 保持停止新订单。详见 [Deposit 申请说明](docs/DEPOSIT.md)。
+Deposit 页新增独立 VPay 建单表单，默认关闭；GSPAY+ MYR 与 USDT 保留未开放的入口，USDT 不接收新订单。服务端只读查询固定 VPay 网关状态，总部后台可查看脱敏的检查结果；配置资料存在或网关报告就绪均不会自动开启本平台结算。GSPAY+ MYR 已加入不联网的签名、查单/回调验签及 DuitNow 状态校验，网络适配和钱包入账仍关闭。普通会员不接收诊断详情，USDT 保持停止新订单。详见 [Deposit 申请说明](docs/DEPOSIT.md)及 [GSPAY+ MYR 接入准备](docs/GSPAY.md)。
 
-每笔平台充值订单另存明确来源 `vpay`、`gspay_myr`、`bank_transfer` 或 `unknown`。新增迁移把旧银行订单归为银行转账，其余已有平台订单归为 VPay；后续未指定来源的记录会进入“未识别渠道”单独核对，不会混进 VPay 金额。财务员工须经总部或租户老板单独授权，才可查看并导出本租户统一充值记录；普通员工不能查看。统一记录筛选按 Asia/Kuching 日期计算，CSV 时间戳仍标明 UTC。GSPAY+ 仍没有建单、回调或入账接口，不会因新增分类而自动启用。
+每笔平台充值订单另存明确来源 `vpay`、`gspay_myr`、`bank_transfer` 或 `unknown`。新增迁移把旧银行订单归为银行转账，其余已有平台订单归为 VPay；后续未指定来源的记录会进入“未识别渠道”单独核对，不会混进 VPay 金额。财务员工须经总部或租户老板单独授权，才可查看并导出本租户统一充值记录；普通员工不能查看。统一记录筛选按 Asia/Kuching 日期计算，CSV 时间戳仍标明 UTC。GSPAY+ MYR 的离线协议代码不会自动启用建单、回调或入账接口。
 
 VPay 的独立离线契约模块提供 MYR 精确金额、未签名建单资料及供应商返回字段校验；模块自身不导入数据库、不读取密钥、不发送请求或入账；本分支另有服务路由使用它校验付款字段。解析到供应商的“已付款”状态仍返回 `authenticated:false` 与 `fundsProcessed:false`，不能据此入账。实现范围及真实联调前提见 [VPay 接入准备](docs/VPAY.md)。
 
