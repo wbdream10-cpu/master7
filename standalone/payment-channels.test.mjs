@@ -90,6 +90,7 @@ test('configured UAT readiness is shown only in headquarters diagnostics, never 
   assert.equal(admin.diagnostics.gateway.configured, true);
   assert.equal(admin.diagnostics.gateway.configurationReady, true);
   assert.equal(admin.diagnostics.gateway.liveReady, false);
+  assert.equal(admin.diagnostics.limitations.gspay_myr, 'offline_contract_verified_adapter_disabled');
   assert.equal(admin.diagnostics.limitations.gspay_usdt, 'new_orders_stopped');
   assert(!JSON.stringify(admin).includes('private-do-not-expose'));
   assert(!JSON.stringify(admin).includes('INTERNAL_ENV_NAME'));
