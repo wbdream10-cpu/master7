@@ -16,7 +16,7 @@
 
 - SQLite／PostgreSQL 迁移 `0003_wallet_deposits.sql` 创建私有订单、账本和复核表；`0004_vpay_checkout.sql` 添加建单结果与回执字段，不改写已有账本。PostgreSQL 使用私有 schema、RLS 并撤销浏览器角色直接访问。
 - UAT／production 分开记账。UAT 只是本地配置，不能证明供应商提供沙箱；本地模拟测试不允许使用真实付款补测。
-- `GET /api/v1/wallet` 的余额范围为 `deposit_credits_only`。尚无旧余额初始化、游戏扣款、提现冻结、退款冲正或完整游戏主钱包，不能用于宣称原会员游戏余额已恢复。
+- `GET /api/v1/wallet` 保留 `balanceMinor`，并返回 `postedBalanceMinor`、`heldMinor` 与 `availableMinor`。正式环境余额包含已核验充值和已登记付款的人工提现，活动提现冻结只减少可用额；UAT 仍只有充值测试账本。尚无旧余额初始化、游戏扣款、退款冲正或完整游戏主钱包，不能用于宣称原会员游戏余额已恢复。人工提现边界见 [人工提现与财务审核](WITHDRAWALS.md)。
 - `GET /api/v1/payment-records` 支持环境、租户、最多 31 个 UTC 日筛选及 100 条分页；合计覆盖整个筛选期间。核验／入账时间按 MYT 显示。
 - `GET /api/v1/payment-records/export` 仅管理角色可用，完整导出期间最多 10000 条订单，超限明确拒绝；导出审计并防止表格公式注入。后台查询和 CSV 不包含付款链接。
 - 汇总来自本地订单与账本；没有导入 VPay／银行全量结算报表，不能声称银行结算对账完成。

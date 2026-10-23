@@ -183,10 +183,20 @@ test('today metrics are Asia/Kuching tenant-scoped, channel-separated and truthf
    VALUES ('synthetic-vpay-order','alpha','alice','synthetic_vpay_key','3647','production',500,'MYR','synthetic-vpay-trade','credited',0,?,?,?,'created','2','vpay')`).run(createdAt,createdAt,createdAt);
   await sql.prepare(`INSERT INTO portal_wallet_journal(id,order_id,tenant_id,user_id,environment,currency,member_minor,clearing_minor,created_at)
    VALUES ('synthetic-vpay-journal','synthetic-vpay-order','alpha','alice','production','MYR',500,-500,?)`).run(createdAt);
+  for(const [id,amount,paidAt] of [['metric-withdrawal-in-day',700,'2026-10-22T16:00:00.000Z'],['metric-withdrawal-next-day',900,'2026-10-23T16:00:00.000Z']]){
+   await sql.prepare(`INSERT INTO portal_withdrawal_requests(id,tenant_id,user_id,request_key,request_fingerprint,environment,amount_minor,currency,bank_name,account_holder,account_number,status,payout_reference,paid_at,created_at,updated_at)
+    VALUES (?,'alpha','alice',?,?,'production',?,'MYR','Synthetic Bank','SYNTHETIC MEMBER','0000','paid',?,?,?,?)`).run(id,id+'-request','f'.repeat(64),amount,id+'-reference',paidAt,paidAt,paidAt);
+   await sql.prepare(`INSERT INTO portal_wallet_holds(withdrawal_id,tenant_id,user_id,environment,currency,amount_minor,state,created_at,updated_at,consumed_at)
+    VALUES (?,'alpha','alice','production','MYR',?,'consumed',?,?,?)`).run(id,amount,paidAt,paidAt,paidAt);
+   await sql.prepare(`INSERT INTO portal_wallet_withdrawal_journal(id,withdrawal_id,tenant_id,user_id,environment,currency,member_minor,clearing_minor,created_at)
+    VALUES (?,?, 'alpha','alice','production','MYR',?,?,?)`).run(id+'-journal',id,-amount,amount,paidAt);
+  }
  });
  assert.equal((await bank.getTodayMetrics(employee)).status,403);
  const metrics=await body(await bank.getTodayMetrics(finance));assert.equal(metrics.date,'2026-10-23');assert.equal(metrics.timeZone,'Asia/Kuching');
- assert.deepEqual(metrics.withdrawals,{enabled:false,count:0,amountMinor:'0'});assert.deepEqual(metrics.deposits.channels.gspay_myr,{enabled:false,count:0,amountMinor:'0',submitted:{count:0,amountMinor:'0'},credited:{count:0,amountMinor:'0'}});
+ assert.deepEqual(metrics.withdrawals,{enabled:false,count:1,amountMinor:'700'});assert.deepEqual(metrics.deposits.channels.gspay_myr,{enabled:false,count:0,amountMinor:'0',submitted:{count:0,amountMinor:'0'},credited:{count:0,amountMinor:'0'}});
+ const openMetrics=await body(await createBankDeposits({now:()=>new Date(fixed),rateLimit:async()=>false,env:{...vpayEnv,PORTAL_WITHDRAWALS_ENABLED:'true'}}).getTodayMetrics(finance));
+ assert.deepEqual(openMetrics.withdrawals,{enabled:true,count:1,amountMinor:'700'}),'the new-request switch must not hide paid history, and the MYT end boundary is exclusive';
  assert.equal(metrics.deposits.channels.vpay.submitted.count,1);assert.equal(metrics.deposits.channels.vpay.submitted.amountMinor,'500');assert.equal(metrics.deposits.channels.vpay.credited.amountMinor,'500');
  assert.equal(metrics.deposits.channels.vpay.enabled,true);const incomplete=await body(await createBankDeposits({now:()=>new Date(fixed),rateLimit:async()=>false,env:{PORTAL_VPAY_ORDERS_ENABLED:'true',PORTAL_VPAY_SETTLEMENT_ENABLED:'true',PORTAL_VPAY_ENVIRONMENT:'production'}}).getTodayMetrics(finance));assert.equal(incomplete.deposits.channels.vpay.enabled,false);
  assert.equal(metrics.deposits.channels.bank_transfer.submitted.count,3);assert.equal(metrics.deposits.channels.bank_transfer.submitted.amountMinor,'12845');assert.equal(metrics.deposits.channels.bank_transfer.credited.amountMinor,'12345');
