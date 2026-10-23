@@ -10,6 +10,7 @@ process.env.NODE_ENV='test';
 const directory=mkdtempSync(join(tmpdir(),'master7-bank-deposits-http-'));
 process.env.PORTAL_DATABASE=join(directory,'portal.sqlite');
 process.env.PUBLIC_ORIGIN='https://portal.example.test';
+process.env.PORTAL_ALLOWED_ORIGINS='https://master7.vip,https://master7.best';
 
 const {sql,withStorage}=await import('./runtime.mjs');
 const {newSession}=await import('./security.mjs');
@@ -43,7 +44,7 @@ try{
  const excessiveJson=JSON.stringify({...configuration,padding:'x'.repeat(17000)});
  assert.equal((await call('/api/v1/bank-transfer/config',{method:'POST',headers:jsonHeaders(ownerCookie),body:excessiveJson})).status,413,'ordinary JSON must retain the 16 KiB cap');
 
- const configured=await call('/api/v1/bank-transfer/config',{method:'POST',headers:jsonHeaders(ownerCookie),body:JSON.stringify(configuration)});
+ const configured=await call('/api/v1/bank-transfer/config',{method:'POST',headers:jsonHeaders(ownerCookie,{Origin:'https://master7.vip'}),body:JSON.stringify(configuration)});
  assert.equal(configured.status,200);
  assert.equal((await configured.json()).bankAccount.accountNumber,configuration.accountNumber);
  const visible=await (await call('/api/v1/bank-transfer/config',{headers:{Cookie:memberCookie}})).json();
@@ -63,7 +64,7 @@ try{
  assert.equal((await call(receiptPath,{method:'PUT',headers:{Cookie:memberCookie,Origin:process.env.PUBLIC_ORIGIN,'Content-Type':'image/png','X-Portal-Request':'1'},body:oversized})).status,413,'receipt uploads must use the independent 2 MiB cap');
 
  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
- const uploaded=await call(receiptPath,{method:'PUT',headers:{Cookie:memberCookie,Origin:process.env.PUBLIC_ORIGIN,'Content-Type':'image/png','X-Portal-Request':'1'},body:png});
+ const uploaded=await call(receiptPath,{method:'PUT',headers:{Cookie:memberCookie,Origin:'https://master7.best','Content-Type':'image/png','X-Portal-Request':'1'},body:png});
  assert.equal(uploaded.status,200);
  assert.equal((await uploaded.json()).receipt.size,png.length);
  const receipt=await call(receiptPath,{headers:{Cookie:memberCookie}});

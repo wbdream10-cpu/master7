@@ -4,7 +4,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 delete process.env.PORTAL_POSTGRES_URL;delete process.env.PORTAL_TEST_POSTGRES;delete process.env.RENDER;
 process.env.NODE_ENV='test';const dir=mkdtempSync(join(tmpdir(),'master7-wallet-http-'));
-process.env.PORTAL_DATABASE=join(dir,'wallet.sqlite');process.env.PUBLIC_ORIGIN='https://portal.example.test';
+process.env.PORTAL_DATABASE=join(dir,'wallet.sqlite');process.env.PUBLIC_ORIGIN='https://portal.example.test';process.env.PORTAL_ALLOWED_ORIGINS='https://master7.vip,https://master7.best';
 Object.assign(process.env,{PORTAL_VPAY_ORDERS_ENABLED:'true',PORTAL_VPAY_TRADE_CODES:'["2"]',PORTAL_VPAY_ORDER_TOKEN:'synthetic-order-token-at-least-32-bytes',PORTAL_VPAY_RETURN_URL:'https://portal.example.test/payment-return',PORTAL_VPAY_SETTLEMENT_ENABLED:'true',PORTAL_VPAY_TRADER_ID:'123456',PORTAL_VPAY_ENVIRONMENT:'uat',PORTAL_VPAY_CALLBACK_TOKEN:'synthetic-callback-token-at-least-32-bytes',PORTAL_VPAY_QUERY_TOKEN:'synthetic-query-token-at-least-32-bytes'});
 const nativeFetch=globalThis.fetch;let expected,order,queryCalls=0,createCalls=0;
 globalThis.fetch=(input,options)=>{
@@ -47,7 +47,7 @@ try{
  assert.equal((await call('/api/v1/payments/vpay/orders',{method:'POST',headers:{...headers,Origin:'https://attacker.example.test'},body:JSON.stringify(data)})).status,403);
  assert.equal((await call('/api/v1/payments/vpay/orders',{method:'POST',headers:{...headers,'X-Portal-Request':''},body:JSON.stringify(data)})).status,415);
  assert.equal((await call('/api/v1/payments/vpay/orders',{method:'POST',headers:{...headers,Cookie:ownerCookie},body:JSON.stringify(data)})).status,403);
- const created=await call('/api/v1/payments/vpay/orders',{method:'POST',headers,body:JSON.stringify(data)});assert.equal(created.status,200);order=await created.json();assert.equal(order.status,'awaiting_payment');assert.equal(order.payUrl,'https://payment.vpay.club/pay/synthetic');assert.equal(createCalls,1);
+ const created=await call('/api/v1/payments/vpay/orders',{method:'POST',headers:{...headers,Origin:'https://master7.best'},body:JSON.stringify(data)});assert.equal(created.status,200);order=await created.json();assert.equal(order.status,'awaiting_payment');assert.equal(order.payUrl,'https://payment.vpay.club/pay/synthetic');assert.equal(createCalls,1);
  const duplicate=await (await call('/api/v1/payments/vpay/orders',{method:'POST',headers,body:JSON.stringify(data)})).json();assert.equal(duplicate.id,order.id);assert.equal(createCalls,1);
  assert.equal((await call('/payment-return?state=3&amount=1000',{headers:{Cookie:memberCookie}})).status,200);
  assert.equal((await (await call('/api/v1/wallet?environment=uat',{headers:{Cookie:memberCookie}})).json()).balanceMinor,'0');
