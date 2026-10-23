@@ -126,7 +126,7 @@ try{
  assert.equal((await form('/accounts/tenant',{tenantId:'alpha'},ownerCookie)).status,303);
  assert.equal((await form('/accounts/tenant',{tenantId:'beta'},ownerCookie)).status,303);
  const ids={};
- for(const username of ['tenantboss','staffmember','tenantclient','outsideclient']){
+ for(const username of ['tenantboss','staffmember','tenantclient','outsideclient','insertclient']){
   assert.equal((await form('/auth/register',{username,email:username+'@example.test',password})).status,200);
   ids[username]=(await sql.prepare('SELECT id FROM portal_users WHERE username=?').get(username)).id;
   assert.equal((await form('/accounts/approve',{id:ids[username]},ownerCookie)).status,303);
@@ -169,6 +169,41 @@ try{
  assert.equal((await form('/accounts/suspend',{id:ids.staffmember},tenantBossCookie)).status,403);
  assert.equal((await form('/accounts/tenant',{tenantId:'noaccess'},tenantBossCookie)).status,403);
  assert.equal((await form('/accounts/role',{id:ids.tenantclient,tenantId:'beta',role:'employee'},ownerCookie)).status,409);
+ const originalExec=sql.exec;let assignmentRaceInjected=false;
+ sql.exec=async function execWithAssignmentRace(source){
+  if(!assignmentRaceInjected&&source.trim()==='BEGIN IMMEDIATE'){
+   assignmentRaceInjected=true;
+   await sql.prepare('INSERT INTO members(email,tenant_id,created_at) VALUES (?,?,?)').run('outsideclient@example.test','beta',new Date().toISOString());
+  }
+  return originalExec.call(sql,source);
+ };
+ let racedAssignment;
+ try{racedAssignment=await form('/accounts/role',{id:ids.outsideclient,tenantId:'alpha',role:'employee'},ownerCookie);}
+ finally{sql.exec=originalExec;}
+ assert.equal(assignmentRaceInjected,true);assert.equal(racedAssignment.status,409);
+ assert.equal((await sql.prepare('SELECT tenant_id FROM members WHERE email=?').get('outsideclient@example.test')).tenant_id,'beta');
+ assert.equal(await sql.prepare('SELECT user_id FROM portal_staff WHERE user_id=?').get(ids.outsideclient),undefined);
+ const originalPrepare=sql.prepare;let insertRaceInjected=false;
+ sql.prepare=function prepareWithInsertRace(source){
+  const statement=originalPrepare.call(sql,source);
+  if(source.startsWith('INSERT INTO members(email,tenant_id,created_at) VALUES (?,?,?) ON CONFLICT(email)')){
+   const originalRun=statement.run;
+   statement.run=async function runWithInsertRace(email,tenantId,createdAt){
+    if(email==='insertclient@example.test'&&!insertRaceInjected){
+     insertRaceInjected=true;
+     await originalPrepare.call(sql,'INSERT INTO members(email,tenant_id,created_at) VALUES (?,?,?)').run(email,'beta',createdAt);
+    }
+    return originalRun.call(statement,email,tenantId,createdAt);
+   };
+  }
+  return statement;
+ };
+ let insertRacedAssignment;
+ try{insertRacedAssignment=await form('/accounts/role',{id:ids.insertclient,tenantId:'alpha',role:'employee'},ownerCookie);}
+ finally{sql.prepare=originalPrepare;}
+ assert.equal(insertRaceInjected,true);assert.equal(insertRacedAssignment.status,409);
+ assert.equal(await sql.prepare('SELECT tenant_id FROM members WHERE email=?').get('insertclient@example.test'),undefined);
+ assert.equal(await sql.prepare('SELECT user_id FROM portal_staff WHERE user_id=?').get(ids.insertclient),undefined);
  assert.equal((await post({action:'create-ticket',subject:'Alpha help',body:'Scoped request'},tenantClientCookie)).status,201);
  const alphaTicket=(await (await get(tenantClientCookie)).json()).tickets[0].id;
  assert.equal((await post({action:'update-ticket',id:alphaTicket,status:'已完成',reply:'Handled by employee'},staffCookie)).status,200);

@@ -11,11 +11,13 @@
 | 文件 | 已实现的边界 | 当前关闭条件 |
 | --- | --- | --- |
 | `standalone/gspay-provider.mjs` | 门户只可连接固定 MASTER7 集成网关；订单、查询与回调机器凭据相互隔离；查询请求携带平台保存的订单、会员和精确金额预期值 | `status()` 的协议、建单、查询、回调及上线状态均为未就绪；建单在任何网络请求前返回 `GSPAY_CREATE_SCHEMA_UNCONFIRMED` |
-| `standalone/gspay-checkout-core.mjs` | 约束本地幂等订单、一次建单、失联订单保持未知、脱敏回调收件、独立查单以及单一原子结算能力 | 没有存储和 HTTP 运行时接线；只有显式开关、版本化网关能力与全部依赖同时通过才可能进入流程 |
+| `standalone/gspay-checkout-core.mjs` | 约束本地幂等订单、一次建单、失联订单保持未知、脱敏回调收件、独立查单以及单一原子结算能力 | 没有 HTTP 运行时接线；只有显式开关、版本化网关能力与全部依赖同时通过才可能进入流程 |
+| `standalone/gspay-store.mjs` | 为核心提供 SQLite/PostgreSQL 持久化：订单保留与 CAS、脱敏 callback inbox、带 120 秒租约和 attempt fencing 的查询尝试，以及普通 MYR Payment 确认到账时订单、唯一钱包账本、相关 callback/attempt 和审计的单事务提交；结算时锁定并重新核对会员及租户归属，查询矛盾、终态冲突或账本不一致转入持久复核 | 仅为可注入适配器，没有接入服务器路由、后台任务或启用开关；DuitNow 缺少独立查单协议，所有 DuitNow 回调都不会进入自动结算 |
 | `0009_gspay_myr_checkout.sql` | 为 SQLite 与 PostgreSQL 增加厂家应付金额、脱敏回调 inbox 和调用尝试表；约束 GSPAY 订单、哈希、金额、状态和回调/订单归属 | 迁移只建立空结构，不导入旧订单，不创建生产记录，不启用任何通道 |
+| `0010_gspay_atomic_settlement.sql` | 为 GSPAY 订单增加经过格式限制的厂家会员标识，并在数据库层限制每个订单最多一个进行中的独立查询 | 迁移只增加可空字段和并发约束，不回填订单、不连接厂家，也不改变运行时开关 |
 | `app/portal.tsx` | 会员和总部可读取脱敏的接线状态 | 没有金额表单、订单提交、厂家跳转或自动入账操作 |
 
-门户进程不保存厂家 auth key 或 secret，也不直连 `api.thegspay.com`。新增表明确不保存原始 JSON、签名、remark、auth key、secret 或银行资料。合成测试验证默认关闭零网络/零写入、建单幂等、未知结果不自动重发、回调只记录安全投影、独立查询匹配以及只有单一 `commitConfirmed` 原子能力可以完成入账；这些测试不等于真实厂家联调或生产验收。
+门户进程不保存厂家 auth key 或 secret，也不直连 `api.thegspay.com`。新增表明确不保存原始 JSON、签名、remark、auth key、secret 或银行资料。SQLite 与 PostgreSQL/PGlite 合成测试验证默认关闭零网络/零写入、建单幂等、未知结果不自动重发、回调只记录安全投影、独立查询匹配、会员归属复核、并发只入账一次及事务失败完整回滚；这些测试不等于真实厂家联调或生产验收。
 
 本轮没有创建真实 GSPAY 订单、查询生产余额、保存厂家 Callback Settings、处理真钱或增加会员钱包，也没有修改 `master7.vip`、`master7.best`、DNS、TLS 或 Cloudflare 配置。
 
@@ -25,7 +27,7 @@
 
 | 路径 | 调用方 | 固定行为 |
 | --- | --- | --- |
-| `GET /api/v1/payments/gspay/config?tenant=...` | 已登录会员、租户老板或总部 | 按会话与租户范围返回脱敏状态；所有启用和就绪字段固定为 `false`，blocker 为 `GSPAY_SETTLEMENT_DISABLED` |
+| `GET /api/v1/payments/gspay/config?tenant=...` | 已登录会员、租户老板或总部 | 按会话与租户范围返回脱敏状态；所有启用和就绪字段固定为 `false`，blockers 包含 `GSPAY_CREATE_SCHEMA_UNCONFIRMED` 与 `GSPAY_SETTLEMENT_DISABLED` |
 | `POST /api/v1/payment-callbacks/gspay/payment` | MASTER7 集成网关 | 只接受独立 Bearer token、`application/json` 和最多 16 KiB 的 JSON object；有效请求仍固定返回 HTTP 503 `GSPAY_SETTLEMENT_DISABLED` |
 | `POST /api/v1/payment-callbacks/gspay/duitnow` | MASTER7 集成网关 | 与 Payment 内部入口相同，固定关闭 |
 
@@ -76,7 +78,7 @@ DuitNow 回调字段为 `dnpayment_id`、`transaction_id`、`amount`、`expire_d
 dnpayment_id + amount（固定两位小数） + transaction_id + status + operator_secret_key
 ```
 
-已见状态：`0` Pending/Expired、`1` Success（manual update）、`2` Success、`4` Timeout/Rejected。状态 1 必须交给财务复核；状态 2 也应以厂家查单或对账确认后才入账。现有截图没有 DuitNow 独立查单接口、回调应答格式或重试规则，因此不能把回调直接当作最终结算证明。
+已见状态：`0` Pending/Expired、`1` Success（manual update）、`2` Success、`4` Timeout/Rejected。当前持久层把全部 DuitNow 回调保留为财务复核或不可支付记录，不创建独立查询任务，也不自动写钱包。即使状态为 2，也必须等厂家提供可验证的 DuitNow 独立查单或对账协议后再设计结算。现有截图没有该协议、回调应答格式或重试规则，因此不能把回调直接当作最终结算证明。
 
 ## 余额查询
 
@@ -119,4 +121,4 @@ GET https://api.thegspay.com/v2/integrations/operator/{auth_key}/get/balance
 6. DuitNow 的独立查单接口及厂家返回的实际应付金额字段。
 7. Callback Settings 的白名单流量方向和稳定性，以及生产出口 IP 的真实归属。
 
-只有这些项目明确、离线及沙箱验收通过、密钥通过服务端秘密配置注入，并完成回调收件箱、独立查单、幂等钱包账本和财务对账后，才能考虑开放 GSPAY+ MYR。
+只有这些项目明确、离线及沙箱验收通过、密钥通过服务端秘密配置注入，把现有内部 store 接入经认证的运行时，并完成真实回调、独立查单、并发钱包、故障恢复和财务对账验收后，才能考虑开放 GSPAY+ MYR。

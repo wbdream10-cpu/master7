@@ -43,7 +43,9 @@ async function baseOrder(id, userId, provider, requestKey) {
 
 test('migration adds no operational data and reuses the common order ledger', async () => {
   const version = await sql.prepare('SELECT name FROM schema_versions WHERE name=?').get('0009_gspay_myr_checkout.sql');
+  const atomicVersion = await sql.prepare('SELECT name FROM schema_versions WHERE name=?').get('0010_gspay_atomic_settlement.sql');
   assert.equal(version.name, '0009_gspay_myr_checkout.sql');
+  assert.equal(atomicVersion.name, '0010_gspay_atomic_settlement.sql');
   assert.equal(await count('portal_payment_orders'), 0);
   assert.equal(await count('portal_gspay_callbacks'), 0);
   assert.equal(await count('portal_gspay_attempts'), 0);
@@ -56,8 +58,13 @@ test('provider payable amount is exact and bounded', async () => {
   assert.deepEqual({ provider: row.provider, amount: Number(row.amount_minor), providerAmount: Number(row.provider_amount_minor) }, {
     provider: 'gspay_myr', amount: 1000, providerAmount: 1000,
   });
+  await sql.prepare('UPDATE portal_payment_orders SET provider_player_username=? WHERE id=?').run('alice_01', 'gspay-order-1');
+  assert.equal((await sql.prepare('SELECT provider_player_username FROM portal_payment_orders WHERE id=?').get('gspay-order-1')).provider_player_username, 'alice_01');
   await assert.rejects(() => sql.prepare('UPDATE portal_payment_orders SET provider_amount_minor=10000001 WHERE id=?').run('gspay-order-1'));
   await assert.rejects(() => sql.prepare('UPDATE portal_payment_orders SET provider_amount_minor=1000 WHERE id=?').run('vpay-order-1'));
+  await assert.rejects(() => sql.prepare('UPDATE portal_payment_orders SET provider_player_username=? WHERE id=?').run('Alice', 'gspay-order-1'));
+  await assert.rejects(() => sql.prepare('UPDATE portal_payment_orders SET provider_player_username=? WHERE id=?').run('a!', 'gspay-order-1'));
+  await assert.rejects(() => sql.prepare('UPDATE portal_payment_orders SET provider_player_username=? WHERE id=?').run('bob_01', 'vpay-order-1'));
 });
 
 test('sanitized callback inbox is idempotent, GSPAY-only, and query-gated', async () => {
@@ -101,6 +108,11 @@ test('provider attempts retain bounded reconciliation fields and enforce operati
   await assert.rejects(() => sql.prepare(`INSERT INTO ${table('portal_gspay_attempts')}(
     id,order_id,callback_id,operation,attempt_key,outcome,started_at
   ) VALUES (?,?,?,?,?,'in_flight',?)`).run(
+    'attempt-query-concurrent', 'gspay-order-1', 'callback-1', 'query', 'query-attempt-0002', now,
+  ));
+  await assert.rejects(() => sql.prepare(`INSERT INTO ${table('portal_gspay_attempts')}(
+    id,order_id,callback_id,operation,attempt_key,outcome,started_at
+  ) VALUES (?,?,?,?,?,'in_flight',?)`).run(
     'attempt-create-invalid', 'gspay-order-1', 'callback-1', 'create', 'create-attempt-0001', now,
   ));
   await assert.rejects(() => sql.prepare(`INSERT INTO ${table('portal_gspay_attempts')}(
@@ -119,6 +131,13 @@ test('provider attempts retain bounded reconciliation fields and enforce operati
     completed_at=? WHERE id='attempt-query-1'`).run('2026-10-24T00:00:01.000Z');
   await sql.prepare(`UPDATE ${table('portal_gspay_callbacks')} SET
     processing_state='processed',processed_at=? WHERE id='callback-1'`).run('2026-10-24T00:00:01.000Z');
+  await sql.prepare(`INSERT INTO ${table('portal_gspay_attempts')}(
+    id,order_id,operation,attempt_key,outcome,started_at
+  ) VALUES (?,?,'query',?,'in_flight',?)`).run(
+    'attempt-query-retry', 'gspay-order-1', 'query-attempt-0003', '2026-10-24T00:00:02.000Z',
+  );
+  await sql.prepare(`UPDATE ${table('portal_gspay_attempts')} SET
+    outcome='unknown',result_code='QUERY_RETRY_LATER',completed_at=? WHERE id='attempt-query-retry'`).run('2026-10-24T00:00:03.000Z');
   const callback = await sql.prepare(`SELECT * FROM ${table('portal_gspay_callbacks')} WHERE id=?`).get('callback-1');
   const attempt = await sql.prepare(`SELECT * FROM ${table('portal_gspay_attempts')} WHERE id=?`).get('attempt-query-1');
   assert.equal(callback.processing_state, 'processed');

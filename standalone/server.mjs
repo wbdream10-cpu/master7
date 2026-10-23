@@ -330,11 +330,22 @@ async function handle(req){const url=new URL(req.url,origin);const user=(await s
    const membership=(await sql.prepare('SELECT tenant_id FROM members WHERE email=?').get(target.email)),staff=(await sql.prepare('SELECT tenant_id FROM portal_staff WHERE user_id=?').get(id));
    if((membership&&membership.tenant_id!==tenantId)||(staff&&staff.tenant_id!==tenantId))return json({error:'账号已归属其他租户，不能直接转移'},409);
    (await sql.exec('BEGIN IMMEDIATE'));try{
-    (await sql.prepare('INSERT INTO members(email,tenant_id,created_at) VALUES (?,?,?) ON CONFLICT(email) DO NOTHING').run(target.email,tenantId,new Date().toISOString()));
+    // Serialize membership/staff assignment with wallet settlements that
+    // revalidate this identity before crediting funds.
+    const identityLock=await sql.prepare("UPDATE portal_users SET id=id WHERE id=? AND role='customer'").run(id);
+    if(identityLock.changes!==1)throw Error('ACCOUNT_NOT_FOUND');
+    const currentTarget=await sql.prepare("SELECT id,email FROM portal_users WHERE id=? AND role='customer'").get(id);
+    await sql.prepare('UPDATE members SET email=email WHERE email=?').run(currentTarget.email);
+    const currentMembership=await sql.prepare('SELECT tenant_id FROM members WHERE email=?').get(currentTarget.email);
+    const currentStaff=await sql.prepare('SELECT tenant_id FROM portal_staff WHERE user_id=?').get(id);
+    if((currentMembership&&currentMembership.tenant_id!==tenantId)||(currentStaff&&currentStaff.tenant_id!==tenantId))throw Error('TENANT_ASSIGNMENT_CONFLICT');
+    (await sql.prepare('INSERT INTO members(email,tenant_id,created_at) VALUES (?,?,?) ON CONFLICT(email) DO NOTHING').run(currentTarget.email,tenantId,new Date().toISOString()));
+    const assignedMembership=await sql.prepare('SELECT tenant_id FROM members WHERE email=?').get(currentTarget.email);
+    if(!assignedMembership||assignedMembership.tenant_id!==tenantId)throw Error('TENANT_ASSIGNMENT_CONFLICT');
     const financeRevoked=await sql.prepare('DELETE FROM portal_finance_staff WHERE user_id=?').run(id);
     if(role==='customer')(await sql.prepare('DELETE FROM portal_staff WHERE user_id=?').run(id));else (await sql.prepare('INSERT INTO portal_staff VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET role=excluded.role').run(id,tenantId,role));
-    (await sql.prepare('DELETE FROM portal_sessions WHERE user_id=?').run(id));if(financeRevoked.changes)(await log(user,'职责变更撤销财务审核权限：'+target.email));(await log(user,'分配职责：'+target.email+' / '+tenantId+' / '+role));(await sql.exec('COMMIT'));
-   }catch(e){(await sql.exec('ROLLBACK'));throw e;}return redirect('/accounts');
+    (await sql.prepare('DELETE FROM portal_sessions WHERE user_id=?').run(id));if(financeRevoked.changes)(await log(user,'职责变更撤销财务审核权限：'+currentTarget.email));(await log(user,'分配职责：'+currentTarget.email+' / '+tenantId+' / '+role));(await sql.exec('COMMIT'));
+   }catch(e){(await sql.exec('ROLLBACK'));if(e.message==='ACCOUNT_NOT_FOUND')return json({error:'账号不存在'},404);if(e.message==='TENANT_ASSIGNMENT_CONFLICT')return json({error:'账号已归属其他租户，不能直接转移'},409);throw e;}return redirect('/accounts');
   }
   if(method==='POST'&&['/accounts/approve','/accounts/suspend'].includes(url.pathname)){
    const f=new URLSearchParams((await bodyOf(req)).toString()),id=f.get('id')||'',approve=url.pathname.endsWith('approve');
