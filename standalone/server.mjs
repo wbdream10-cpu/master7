@@ -13,8 +13,28 @@ import {createVPaySettlement,getWallet,getPaymentRecords} from './wallet.mjs';
 import {createVPayCheckout} from './vpay-checkout.mjs';
 import {createSponsoredGamesHandler} from './sponsored-games.mjs';
 import {BankReceiptUploadError,createBankDeposits,readBankReceiptBody} from './bank-deposits.mjs';
-const origin=new URL(process.env.PUBLIC_ORIGIN||'http://127.0.0.1:8080');
-if(origin.protocol!=='https:'&&!['127.0.0.1','localhost','[::1]'].includes(origin.hostname))throw Error('PUBLIC_ORIGIN must use HTTPS outside local development.');
+const loopbackHosts=new Set(['127.0.0.1','localhost','[::1]']);
+function configuredWebOrigin(value,name){
+ const raw=String(value||'').trim();
+ let parsed;try{parsed=new URL(raw);}catch{throw Error(`${name} must be a valid HTTP(S) origin.`);}
+ if(!['http:','https:'].includes(parsed.protocol)||parsed.username||parsed.password||parsed.pathname!=='/'||parsed.search||parsed.hash)throw Error(`${name} must contain only an HTTP(S) origin, without credentials, path, query, or fragment.`);
+ if(parsed.protocol!=='https:'&&!loopbackHosts.has(parsed.hostname))throw Error(`${name} must use HTTPS outside local development.`);
+ return parsed;
+}
+const origin=configuredWebOrigin(process.env.PUBLIC_ORIGIN||'http://127.0.0.1:8080','PUBLIC_ORIGIN');
+const allowedOrigins=new Set([origin.origin]);
+const allowedOriginConfig=String(process.env.PORTAL_ALLOWED_ORIGINS||'').trim();
+if(allowedOriginConfig.length>2000)throw Error('PORTAL_ALLOWED_ORIGINS is too long.');
+if(allowedOriginConfig){
+ const entries=allowedOriginConfig.split(',').map(value=>value.trim());
+ if(entries.length>20||entries.some(value=>!value))throw Error('PORTAL_ALLOWED_ORIGINS must contain at most 20 comma-separated origins.');
+ for(const entry of entries){
+  const allowed=configuredWebOrigin(entry,'PORTAL_ALLOWED_ORIGINS');
+  if(allowed.protocol!==origin.protocol)throw Error('PORTAL_ALLOWED_ORIGINS must use the same protocol as PUBLIC_ORIGIN.');
+  allowedOrigins.add(allowed.origin);
+ }
+}
+const originAllowed=value=>typeof value==='string'&&allowedOrigins.has(value);
 const cookieFlags='; Path=/; HttpOnly; SameSite=Lax'+(origin.protocol==='https:'?'; Secure':'');
 const dummyHash=await hashPassword('unknown-account-password-never-used');
 const escape=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -65,7 +85,7 @@ async function dispatch(req){
    if(req.method==='GET')return bankDeposits.readReceipt(user,tenant,id);
    if(req.method!=='PUT')return json({error:'Method not allowed'},405);
    if(!user)return json({error:'请先登录'},401);
-   if(req.headers.origin!==origin.origin)return json({error:'请求来源不受信任'},403);
+   if(!originAllowed(req.headers.origin))return json({error:'请求来源不受信任'},403);
    if(req.headers['x-portal-request']!=='1')return json({error:'请求格式错误'},415);
    if(!['image/jpeg','image/png','image/webp'].includes(String(req.headers['content-type']||'').split(';')[0].trim().toLowerCase()))return json({error:'银行单据只接受 JPEG、PNG 或 WebP 图片'},415);
    try{return bankDeposits.uploadReceipt(user,tenant,id,await readBankReceiptBody(req),req.headers['content-type']);}
@@ -82,7 +102,7 @@ async function dispatch(req){
   }
   if(req.method!=='POST')return json({error:'Method not allowed'},405);
   if(!user)return json({error:'请先登录'},401);
-  if(req.headers.origin!==origin.origin)return json({error:'请求来源不受信任'},403);
+  if(!originAllowed(req.headers.origin))return json({error:'请求来源不受信任'},403);
   if(req.headers['x-portal-request']!=='1'||!String(req.headers['content-type']).startsWith('application/json'))return json({error:'请求格式错误'},415);
   let data;try{data=JSON.parse((await bodyOf(req)).toString('utf8'));}catch{return json({error:'请求格式错误'},400);}
   if(!data||typeof data!=='object'||Array.isArray(data))return json({error:'请求格式错误'},400);
@@ -102,7 +122,7 @@ async function dispatch(req){
   if(url.pathname.endsWith('/config'))return req.method==='GET'?vpayCheckout.publicStatus(user):json({error:'Method not allowed'},405);
   if(req.method!=='POST')return json({error:'Method not allowed'},405);
   if(!user)return json({error:'请先登录'},401);
-  if(req.headers.origin!==origin.origin)return json({error:'请求来源不受信任'},403);
+  if(!originAllowed(req.headers.origin))return json({error:'请求来源不受信任'},403);
   if(req.headers['x-portal-request']!=='1'||!String(req.headers['content-type']).startsWith('application/json'))return json({error:'请求格式错误'},415);
   let data;try{data=JSON.parse((await bodyOf(req)).toString('utf8'));}catch{return json({error:'请求格式错误'},400);}
   // Supplier network calls must not hold the application's global DB queue.
@@ -125,7 +145,7 @@ async function log(user,action){(await sql.prepare('INSERT INTO audit(id,tenant_
 async function accountsPage(user){const head=user.role==='owner';const users=(await sql.prepare(`SELECT u.id,u.username,u.email,u.role,u.approved,p.role AS staff_role,COALESCE(p.tenant_id,m.tenant_id,'main') AS tenant_id FROM portal_users u LEFT JOIN portal_staff p ON p.user_id=u.id LEFT JOIN members m ON m.email=u.email ${head?'':"WHERE u.role<>'owner' AND COALESCE(p.tenant_id,m.tenant_id,'main')=?"} ORDER BY u.created_at DESC LIMIT 300`).all(...(head?[]:[user.tenantId])));return page('账号与租户管理',`<main class="accounts"><header class="server-brandbar"><img src="/brand/master7-logo.jpg" alt="MASTER7 — SEVEN Premium Experience" width="48" height="48"><div><strong>MASTER7</strong><span>OPERATIONS CONSOLE</span></div></header><div class="page-heading"><div><p class="eyebrow">MEMBERS &amp; ACCESS</p><h1>${head?'总部账号与租户管理':'本租户账号管理'}</h1><p>审批新会员、分配职责，并保持每个品牌的数据权限独立。</p></div><a class="secondary" href="/admin">返回运营后台</a></div>${head?`<section class="account-row"><h2>创建全新租户</h2><form class="settings-form" method="post" action="/accounts/tenant"><label>租户代码<input name="tenantId" required pattern="[a-z0-9][a-z0-9_-]{2,39}" maxlength="40"></label><button class="primary">创建租户</button><p>建立全新空白空间，不导入旧账号、余额、订单或内容。</p></form></section>`:''}${users.map(u=>`<section class="account-row"><b>${escape(u.username)}</b><p>${escape(u.email)} · ${escape(u.tenant_id)} · ${escape(u.role==='owner'?'总部':u.staff_role==='tenant_owner'?'租户老板':u.staff_role==='employee'?'员工':'会员')} · ${u.approved?'已批准':'等待批准'}</p>${u.role!=='owner'&&(head||!u.staff_role)?`<form method="post" action="/accounts/${u.approved?'suspend':'approve'}"><input type="hidden" name="id" value="${escape(u.id)}"><button class="secondary">${u.approved?'暂停并撤销登录':'批准账号'}</button></form>`:''}${head&&u.role!=='owner'?`<form class="settings-form" method="post" action="/accounts/role"><input type="hidden" name="id" value="${escape(u.id)}"><label>租户代码<input name="tenantId" value="${escape(u.tenant_id)}" required maxlength="60"></label><label>职责<select name="role"><option value="customer" ${!u.staff_role?'selected':''}>会员</option><option value="tenant_owner" ${u.staff_role==='tenant_owner'?'selected':''}>租户老板</option><option value="employee" ${u.staff_role==='employee'?'selected':''}>员工</option></select></label><button class="secondary">保存归属与职责并撤销旧登录</button><p>已明确归属其他租户的账号不能直接转移。</p></form>`:''}</section>`).join('')}</main>`)}
 async function connectionsPage(){const rows=(await listConnections()),events=(await listEvents());return page('接口与回调管理',`<main class="accounts"><header class="server-brandbar"><img src="/brand/master7-logo.jpg" alt="MASTER7 — SEVEN Premium Experience" width="48" height="48"><div><strong>MASTER7</strong><span>INTEGRATION CONSOLE</span></div></header><div class="page-heading"><div><p class="eyebrow">OWNER · CONNECTIONS</p><h1>接口与回调管理</h1><p>只管理受控接收通道；收到事件不代表游戏、支付或钱包业务已经完成。</p></div><a class="secondary" href="/admin">返回运营后台</a></div><section class="account-row"><h2>配置接收通道</h2><form class="settings-form" method="post" action="/connections"><label>连接标识<input name="id" required pattern="[a-z0-9][a-z0-9_-]{2,39}" maxlength="40"></label><label>工作空间 ID<input name="tenantId" required value="main" maxlength="60"></label><label>签名密钥的环境变量名<input name="keyEnv" required pattern="PORTAL_HOOK_[A-Z0-9_]{3,60}" maxlength="72" placeholder="PORTAL_HOOK_..." autocomplete="off"></label><p>这里只填写环境变量名称，密钥由部署负责人在服务器设置，至少 32 字节。</p><label><input type="checkbox" name="enabled"> 启用接收</label><button class="primary">保存连接</button></form></section><section class="account-row"><h2>已配置连接</h2>${rows.length?rows.map(c=>`<div class="account-row"><b>${escape(c.id)}</b><p>${escape(c.tenantId)} · ${c.enabled?'已启用':'已停用'} · ${c.configured?'密钥已配置':'缺少密钥'}</p><code>${escape(c.callbackPath)}</code><p>密钥变量：${escape(c.keyEnv)}</p><form method="post" action="/connections"><input type="hidden" name="id" value="${escape(c.id)}"><input type="hidden" name="tenantId" value="${escape(c.tenantId)}"><input type="hidden" name="keyEnv" value="${escape(c.keyEnv)}">${c.enabled?'':'<input type="hidden" name="enabled" value="on">'}<button class="secondary">${c.enabled?'停用连接':'启用连接'}</button></form></div>`).join(''):'<p>暂无连接。</p>'}</section><section class="account-row"><h2>最近收到的事件</h2><p>仅显示事件元数据，原始内容不会在这里公开。事件仍待对应适配器安全处理。</p>${events.length?events.map(e=>`<div class="account-row"><b>${escape(e.type)}</b><p>${escape(e.connectionId)} · ${escape(e.tenantId)} · ${escape(e.receivedAt)}</p><code>${escape(e.eventId)}</code><p>已接收 / 未处理</p></div>`).join(''):'<p>暂无事件。</p>'}</section></main>`)}
 async function handle(req){const url=new URL(req.url,origin);const user=(await sessionUser(req.headers.cookie));const method=req.method||'GET';
- if(method==='POST'&&!url.pathname.startsWith('/api/v1/hooks/')&&req.headers.origin!==origin.origin)return json({error:'请求来源不受信任'},403);
+ if(method==='POST'&&!url.pathname.startsWith('/api/v1/hooks/')&&!originAllowed(req.headers.origin))return json({error:'请求来源不受信任'},403);
  if(url.pathname==='/owner-setup'){
   if(!['GET','POST'].includes(method))return new Response('Method not allowed',{status:405});
   const config=ownerBootstrapConfig();
