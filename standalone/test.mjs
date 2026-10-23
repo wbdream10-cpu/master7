@@ -20,7 +20,10 @@ const get=(cookie='',tenant='')=>req('/api/portal'+(tenant?'?tenant='+tenant:'')
 const session=r=>r.headers.get('set-cookie').split(';')[0];
 try{
  assert.equal((await req('/')).status,303);assert.equal((await req('/admin')).status,303);assert.equal((await get()).status,401);assert.equal((await req('/health')).status,200);
+ assert.equal((await req('/signin')).headers.get('referrer-policy'),'same-origin');
  assert.equal((await form('/auth/login',{username:'owner',password},'','https://evil.test')).status,403);
+ assert.equal((await form('/auth/login',{username:'owner',password},'','null')).status,403);
+ assert.equal((await req('/auth/login',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({username:'owner',password})})).status,403);
  assert.equal((await form('/auth/register',{username:'alice',email:'alice@example.test',password:'weak'})).status,400);
  let r=await form('/auth/register',{username:'alice',email:'alice@example.test',password});assert.equal(r.status,200);let aliceRecovery=(await r.text()).match(/<code class="recovery">([^<]+)/)[1];
  assert.equal((await form('/auth/login',{username:'alice',password})).status,401);
@@ -29,12 +32,27 @@ try{
  assert.equal((await post({action:'save-logo',logo:'http://invalid.test/logo.png'},ownerCookie)).status,400);
  assert.equal((await post({action:'save-logo',logo:'https://example.test/logo.png',name:'Must stay unchanged',color:'#000000'},ownerCookie)).status,200);
  const branded=await (await get(ownerCookie)).json();assert.equal(branded.brand.logo,'https://example.test/logo.png');assert.equal(branded.brand.name,initial.brand.name);assert.equal(branded.brand.color,initial.brand.color);
+ const brandSettings={name:'MASTER7 Member Services',tagline:'Your member service space',color:'#123AbC',logo:'https://example.test/brand.png',language:'en',supportUrl:'https://support.example.test/help'};
+ const brandFields=brand=>Object.fromEntries(Object.keys(brandSettings).map(key=>[key,brand[key]]));
+ assert.equal((await post({action:'save-brand',...brandSettings,id:'forged',tenantId:'forged',createdAt:'forged'},ownerCookie)).status,200);
+ const savedBrand=await (await get(ownerCookie)).json();assert.deepEqual(brandFields(savedBrand.brand),brandSettings);assert.equal(savedBrand.brand.id,'main');assert.notEqual(savedBrand.brand.createdAt,'forged');
+ assert.equal(savedBrand.audit.filter(row=>row.action==='更新品牌设置').length,1);
+ for(const change of [{name:''},{name:'x'.repeat(61)},{color:'red;display:none'},{language:'unknown'},{language:null},{supportUrl:'http://support.example.test'},{supportUrl:'javascript:alert(1)'},{supportUrl:'https://user:password@example.test'},{supportUrl:'https://example.test/'+'x'.repeat(1000)},{logo:'https://user:password@example.test/logo.png'}]){
+  assert.equal((await post({action:'save-brand',...brandSettings,...change},ownerCookie)).status,400);
+ }
+ const rejectedBrand=await (await get(ownerCookie)).json();assert.deepEqual(brandFields(rejectedBrand.brand),brandSettings);assert.equal(rejectedBrand.audit.length,savedBrand.audit.length);
+ const {language:omittedLanguage,supportUrl:omittedSupport,...legacyBrand}=brandSettings;
+ assert.equal((await post({action:'save-brand',...legacyBrand},ownerCookie)).status,200);
+ assert.deepEqual(brandFields((await (await get(ownerCookie)).json()).brand),brandSettings);
+ assert.equal((await post({action:'save-logo',logo:brandSettings.logo,language:'ms',supportUrl:'https://forged.example.test'},ownerCookie)).status,200);
+ assert.deepEqual(brandFields((await (await get(ownerCookie)).json()).brand),brandSettings);
  const {sql,withStorage}=await import('./runtime.mjs');
  await assert.rejects(withStorage(async()=>{await sql.exec('BEGIN IMMEDIATE');await sql.prepare('INSERT INTO brands(id,name,created_at) VALUES (?,?,?)').run('rollback-check','Must not persist',new Date().toISOString());throw Error('Force rollback');}));
  assert.equal(await sql.prepare('SELECT id FROM brands WHERE id=?').get('rollback-check'),undefined);
  const alice=(await sql.prepare("SELECT * FROM portal_users WHERE username='alice'").get());assert.notEqual(alice.password_hash,password);assert.notEqual(alice.recovery_hash,aliceRecovery);
  assert.equal((await form('/accounts/approve',{id:alice.id},ownerCookie)).status,303);
  r=await form('/auth/login',{username:'alice',password});assert.equal(r.status,303);const aliceCookie=session(r);
+ assert.deepEqual(brandFields((await (await get(aliceCookie)).json()).brand),brandSettings);
  const depositPost=(cookie,data,tenant='')=>req('/api/v1/deposit-requests'+(tenant?'?tenant='+tenant:''),{method:'POST',headers:{origin:process.env.PUBLIC_ORIGIN,'content-type':'application/json','x-portal-request':'1',cookie},body:JSON.stringify(data)});
  const depositGet=(cookie,tenant='')=>req('/api/v1/deposit-requests'+(tenant?'?tenant='+tenant:''),{headers:{cookie}});
  const depositPayload={amount:'12.34',currency:'MYR',requestKey:'request_key_test_0001'};
@@ -118,6 +136,13 @@ try{
  assert.equal((await post({action:'save-notice',title:'No',body:'No',published:true},tenantBossCookie,'beta')).status,403);
  assert.equal((await post({action:'create-brand',name:'No'},tenantBossCookie)).status,403);
  assert.equal((await post({action:'save-logo',logo:'https://example.test/alpha.png'},tenantBossCookie)).status,200);
+ const alphaBrand={...brandSettings,name:'Alpha Services',tagline:'Alpha member support',language:'ms',supportUrl:'https://alpha.example.test/support'};
+ assert.equal((await post({action:'save-brand',...alphaBrand},tenantBossCookie)).status,200);
+ assert.deepEqual(brandFields((await (await get(tenantClientCookie)).json()).brand),alphaBrand);
+ for(const [cookie,tenant] of [[tenantBossCookie,'beta'],[staffCookie,''],[tenantClientCookie,'']])assert.equal((await post({action:'save-brand',...alphaBrand,name:'Unauthorized'},cookie,tenant)).status,403);
+ assert.deepEqual(brandFields((await (await get(tenantClientCookie)).json()).brand),alphaBrand);
+ assert.deepEqual(brandFields((await (await get(ownerCookie)).json()).brand),brandSettings);
+ assert.equal((await (await get(tenantBossCookie)).json()).audit.filter(row=>row.action==='更新品牌设置'&&row.actor==='tenantboss@example.test').length,1);
  assert.equal((await post({action:'save-notice',title:'Alpha message',body:'Only alpha',published:true},tenantBossCookie)).status,200);
  assert.equal((await post({action:'save-notice',title:'No',body:'No'},staffCookie)).status,403);
  const workerData=await (await get(staffCookie)).json();assert.equal(workerData.audit.length,0);assert.equal(workerData.members.length,0);
@@ -156,5 +181,5 @@ try{
    const child=spawn(process.execPath,['--input-type=module','-e',code],{env:{...process.env,PORTAL_EXPECTED_TEST_TICKETS:String(expected)},stdio:['ignore','ignore','pipe']});let error='';child.stderr.on('data',d=>error+=d);child.on('close',status=>status?reject(Error(error)):resolve());child.on('error',reject);
   });
  }
- console.log('PASS ['+(postgresTest?'PostgreSQL/PGlite':'SQLite')+']: real local HTTP registration/pending approval/login; owner approval; password hashing; session cookie security; unauthenticated rejection; customer/admin separation; request/reply persistence; tenant isolation; recovery rotation and session revocation; logout; suspension; expired sessions; CSP; built assets; headquarters provisioning; tenant owner isolation; employee restrictions; cross-tenant denial; role-change session revocation; Deposit request validation, exact minor units, idempotency and isolation; password change, old-session invalidation and recovery rotation. Temporary test database only.');
+ console.log('PASS ['+(postgresTest?'PostgreSQL/PGlite':'SQLite')+']: real local HTTP registration/pending approval/login; owner approval; password hashing; session cookie security; unauthenticated rejection; customer/admin separation; request/reply persistence; tenant isolation; recovery rotation and session revocation; logout; suspension; expired sessions; CSP; built assets; headquarters provisioning; tenant owner isolation; employee restrictions; cross-tenant denial; role-change session revocation; Deposit request validation, exact minor units, idempotency and isolation; password change, old-session invalidation and recovery rotation; brand settings persistence, member visibility, legacy compatibility, validation, audit and tenant permissions. Temporary test database only.');
 }finally{await new Promise(r=>server.close(r));const {sql}=await import('./runtime.mjs');(await sql.close());rmSync(dir,{recursive:true,force:true});}

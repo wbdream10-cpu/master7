@@ -5,7 +5,7 @@ import { eq,desc,and,gte,count } from 'drizzle-orm';
 import { isOwner } from '../../../lib/access';
 export const dynamic='force-dynamic';
 const json=(data:unknown,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
-const defaultBrand={id:'main',name:'MASTER7',tagline:'欢迎来到服务中心',color:'#2165e8',logo:''};
+const defaultBrand={id:'main',name:'MASTER7',tagline:'欢迎来到服务中心',color:'#2165e8',logo:'',language:'zh-CN' as const,supportUrl:''};
 async function context(user:{email:string;role?:string;tenantId?:string|null},req?:Request){
  const db=getDb(),headOffice=isOwner(user.email),employee=user.role==='employee',tenantOwner=user.role==='tenant_owner',owner=headOffice||employee||tenantOwner;
  const [member]=await db.select().from(members).where(eq(members.email,user.email.toLowerCase()));
@@ -42,7 +42,7 @@ export async function POST(req:Request){
   }
   if(!owner)return json({error:'仅老板可执行此操作'},403);
   if(employee&&data.action!=='update-ticket')return json({error:'员工仅可处理本租户服务申请'},403);
-  if(!headOffice&&['create-brand','assign-member','save-brand'].includes(data.action))return json({error:'仅总部可分配租户与成员'},403);
+  if(!headOffice&&['create-brand','assign-member'].includes(data.action))return json({error:'仅总部可分配租户与成员'},403);
   if(data.action==='create-brand'){
    const name=field(data.name,60);await db.batch([db.insert(brands).values({id,name,createdAt:now}),db.insert(audit).values({id:crypto.randomUUID(),tenantId,actor:user.email,action:'创建品牌：'+name,createdAt:now})]);return json({ok:true,tenantId:id});
   }else if(data.action==='save-logo'){
@@ -54,7 +54,12 @@ export async function POST(req:Request){
    if(typeof data.color!=='string'||!/^#[0-9a-fA-F]{6}$/.test(data.color))return json({error:'请输入有效的六位主题色'},400);
    if(typeof data.logo!=='string'||data.logo.length>1000)return json({error:'Logo 地址无效'},400);
    if(data.logo){try{const u=new URL(data.logo);if(u.protocol!=='https:'||u.username||u.password)throw Error();}catch{return json({error:'Logo 仅支持 HTTPS 图片地址'},400);}}
-   await db.batch([db.insert(brands).values({id:tenantId,name,tagline,color:data.color,logo:data.logo,createdAt:now}).onConflictDoUpdate({target:brands.id,set:{name,tagline,color:data.color,logo:data.logo}}),db.insert(audit).values({id:crypto.randomUUID(),tenantId,actor:user.email,action:'更新品牌设置',createdAt:now})]);
+   const language=Object.hasOwn(data,'language')?data.language:(brand.language??defaultBrand.language),supportUrl=Object.hasOwn(data,'supportUrl')?data.supportUrl:(brand.supportUrl??defaultBrand.supportUrl);
+   if(typeof language!=='string'||!['zh-CN','en','ms'].includes(language))return json({error:'请选择支持的平台语言'},400);
+   if(typeof supportUrl!=='string'||supportUrl.length>1000)return json({error:'客服地址无效'},400);
+   if(supportUrl){try{const u=new URL(supportUrl);if(u.protocol!=='https:'||u.username||u.password)throw Error();}catch{return json({error:'客服仅支持不含账号密码的 HTTPS 地址'},400);}}
+   const settings={name,tagline,color:data.color,logo:data.logo,language:language as 'zh-CN'|'en'|'ms',supportUrl};
+   await db.batch([db.insert(brands).values({...settings,id:tenantId,createdAt:now}).onConflictDoUpdate({target:brands.id,set:settings}),db.insert(audit).values({id:crypto.randomUUID(),tenantId,actor:user.email,action:'更新品牌设置',createdAt:now})]);
   }else if(data.action==='assign-member'){
    const email=field(data.email,254).toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return json({error:'邮箱格式无效'},400);
    const [existing]=await db.select().from(members).where(eq(members.email,email));

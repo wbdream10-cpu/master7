@@ -10,7 +10,8 @@
     "build": "node standalone/build.mjs",
     "start": "node standalone/server.mjs",
     "test": "node standalone/test.mjs",
-    "test:postgres": "node standalone/test.mjs --postgres"
+    "test:postgres": "node standalone/test.mjs --postgres",
+    "test:migrations": "node standalone/brand-migration.test.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
