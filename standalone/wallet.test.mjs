@@ -20,6 +20,11 @@ await withStorage(async()=>{
   await sql.prepare('INSERT INTO portal_users VALUES (?,?,?,?,?,?,?,?)').run(id,username,id+'@example.test','synthetic-password-hash','customer',1,'synthetic-recovery-hash',at);
   await sql.prepare('INSERT INTO members VALUES (?,?,?)').run(id+'@example.test',tenant,at);
  }
+ await sql.prepare('INSERT INTO portal_users VALUES (?,?,?,?,?,?,?,?)').run('owner','owner','owner@example.test','synthetic-password-hash','owner',1,'synthetic-recovery-hash',at);
+ await sql.prepare('INSERT INTO portal_users VALUES (?,?,?,?,?,?,?,?)').run('boss','boss','boss@example.test','synthetic-password-hash','customer',1,'synthetic-recovery-hash',at);
+ await sql.prepare('INSERT INTO portal_staff VALUES (?,?,?)').run('boss','alpha','tenant_owner');
+ await sql.prepare('INSERT INTO portal_users VALUES (?,?,?,?,?,?,?,?)').run('staff','staff','staff@example.test','synthetic-password-hash','customer',1,'synthetic-recovery-hash',at);
+ await sql.prepare('INSERT INTO portal_staff VALUES (?,?,?)').run('staff','alpha','employee');
 });
 const alice={userId:'alice',email:'alice@example.test',role:'customer',tenantId:'alpha'},bob={userId:'bob',email:'bob@example.test',role:'customer',tenantId:'beta'};
 const owner={userId:'owner',email:'owner@example.test',role:'owner'},boss={userId:'boss',email:'boss@example.test',role:'tenant_owner',tenantId:'alpha'},staff={userId:'staff',email:'staff@example.test',role:'employee',tenantId:'alpha'};
@@ -72,7 +77,7 @@ test('a confirmed payment atomically creates one balanced credit, order record a
  assert.equal(Number(journal.member_minor),1234);assert.equal(Number(journal.clearing_minor),-1234);assert.equal(journal.tenant_id,'alpha');
  const audit=await sql.prepare('SELECT * FROM audit WHERE action=?').get('VPay 充值核验并入账：'+order.id);assert.equal(audit.actor,'system:vpay');
  const statement=await (await records(boss)).json();const row=statement.records.find(r=>r.id===order.id);
- assert.equal(row.member,'alice');assert.equal(row.providerOrderId,order.trade_no);assert.equal(row.amountMinor,'1234');assert.equal(row.creditedMinor,'1234');assert.equal(row.status,'credited');
+ assert.equal(row.member,'alice');assert.equal(row.provider,'vpay');assert.equal(row.providerOrderId,order.trade_no);assert.equal(row.amountMinor,'1234');assert.equal(row.creditedMinor,'1234');assert.equal(row.status,'credited');
 });
 
 test('concurrent and later duplicate notifications credit exactly once',async()=>{
@@ -154,6 +159,20 @@ test('wallet totals and financial records are separated by user, tenant and UAT/
  const prodBalance=await withStorage(()=>getWallet(alice,'alpha','production'));assert.equal((await prodBalance.json()).balanceMinor,'0');
  assert.equal((await withStorage(()=>getWallet(boss,'beta','uat'))).status,403);
  for(const params of [{from:'2026-02-30'},{from:'2026-01-01',to:'2026-12-31'},{environment:'wrong'},{cursor:'bad!'}])assert.equal((await records(owner,params)).status,400);
+});
+
+test('finance records preserve explicit provider channels and keep unclassified orders unknown',async()=>{
+ await withStorage(async()=>{
+  for(const [id,provider,merchant,key] of [
+   ['synthetic-gspay-order','gspay_myr','synthetic-gspay-merchant','synthetic_gspay_record'],
+   ['synthetic-unknown-order','unknown','synthetic-unknown-merchant','synthetic_unknown_record'],
+   ['synthetic-bank-order','bank_transfer','manual_bank','synthetic_bank_record'],
+  ])await sql.prepare("INSERT INTO portal_payment_orders(id,tenant_id,user_id,request_key,merchant_id,environment,amount_minor,currency,settlement_status,created_at,provider) VALUES (?,?,?, ?,?,'uat',100,'MYR','created',?,?)").run(id,'alpha','alice',key,merchant,at,provider);
+ });
+ const result=await (await records(boss)).json(),byId=new Map(result.records.map(row=>[row.id,row]));
+ assert.equal(byId.get('synthetic-gspay-order').provider,'gspay_myr');
+ assert.equal(byId.get('synthetic-unknown-order').provider,'unknown');
+ assert.equal(byId.get('synthetic-bank-order').provider,'bank_transfer');
 });
 
 test('CSV export is manager-only, complete for the selected period, safe for spreadsheets and audited',async()=>{
