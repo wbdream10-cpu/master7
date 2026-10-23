@@ -63,7 +63,7 @@ try{
  assert.equal(await sql.prepare('SELECT id FROM brands WHERE id=?').get('rollback-check'),undefined);
  const alice=(await sql.prepare("SELECT * FROM portal_users WHERE username='alice'").get());assert.notEqual(alice.password_hash,password);assert.notEqual(alice.recovery_hash,aliceRecovery);
  assert.equal((await form('/accounts/approve',{id:alice.id},ownerCookie)).status,303);
- r=await form('/auth/login',{username:'alice',password});assert.equal(r.status,303);const aliceCookie=session(r);
+ r=await form('/auth/login',{username:'alice',password});assert.equal(r.status,303);let aliceCookie=session(r);
  const memberChannels=await (await paymentChannels(aliceCookie)).json();assert.equal(memberChannels.diagnostics,undefined);assert(memberChannels.channels.every(channel=>channel.status==='not_open'&&channel.enabled===false));assert.equal(memberChannels.fundsProcessed,false);
  assert.deepEqual(brandFields((await (await get(aliceCookie)).json()).brand),brandSettings);
  const depositPost=(cookie,data,tenant='')=>req('/api/v1/deposit-requests'+(tenant?'?tenant='+tenant:''),{method:'POST',headers:{origin:process.env.PUBLIC_ORIGIN,'content-type':'application/json','x-portal-request':'1',cookie},body:JSON.stringify(data)});
@@ -87,6 +87,7 @@ try{
  assert.equal((await (await get(aliceCookie)).json()).tickets[0].reply,'Handled');
  r=await post({action:'create-brand',name:'Independent B'},ownerCookie);assert.equal(r.status,200);const tenant=(await r.json()).tenantId;
  assert.equal((await post({action:'assign-member',email:'alice@example.test'},ownerCookie,tenant)).status,200);
+ assert.equal((await get(aliceCookie)).status,401);r=await form('/auth/login',{username:'alice',password});assert.equal(r.status,303);aliceCookie=session(r);
  assert.equal((await (await get(aliceCookie,'main')).json()).tenantId,tenant);assert.equal((await (await get(aliceCookie)).json()).tickets.length,0);
  assert.equal((await post({action:'update-ticket',id:ticketId,status:'已完成',reply:'Cross brand'},ownerCookie,tenant)).status,404);
  assert.equal((await form('/auth/reset',{username:'alice',recovery:'wrong',password:'New-test-password-9834'})).status,400);
@@ -173,7 +174,7 @@ try{
  sql.exec=async function execWithAssignmentRace(source){
   if(!assignmentRaceInjected&&source.trim()==='BEGIN IMMEDIATE'){
    assignmentRaceInjected=true;
-   await sql.prepare('INSERT INTO members(email,tenant_id,created_at) VALUES (?,?,?)').run('outsideclient@example.test','beta',new Date().toISOString());
+   await sql.prepare("UPDATE members SET tenant_id='beta' WHERE email=? AND tenant_id='main'").run('outsideclient@example.test');
   }
   return originalExec.call(sql,source);
  };
@@ -186,14 +187,14 @@ try{
  const originalPrepare=sql.prepare;let insertRaceInjected=false;
  sql.prepare=function prepareWithInsertRace(source){
   const statement=originalPrepare.call(sql,source);
-  if(source.startsWith('INSERT INTO members(email,tenant_id,created_at) VALUES (?,?,?) ON CONFLICT(email)')){
+  if(source.startsWith("UPDATE members SET tenant_id=? WHERE email=? AND tenant_id='main'")){
    const originalRun=statement.run;
-   statement.run=async function runWithInsertRace(email,tenantId,createdAt){
+   statement.run=async function runWithInsertRace(tenantId,email){
     if(email==='insertclient@example.test'&&!insertRaceInjected){
      insertRaceInjected=true;
-     await originalPrepare.call(sql,'INSERT INTO members(email,tenant_id,created_at) VALUES (?,?,?)').run(email,'beta',createdAt);
+     await originalPrepare.call(sql,"UPDATE members SET tenant_id='beta' WHERE email=? AND tenant_id='main'").run(email);
     }
-    return originalRun.call(statement,email,tenantId,createdAt);
+    return originalRun.call(statement,tenantId,email);
    };
   }
   return statement;
@@ -202,7 +203,7 @@ try{
  try{insertRacedAssignment=await form('/accounts/role',{id:ids.insertclient,tenantId:'alpha',role:'employee'},ownerCookie);}
  finally{sql.prepare=originalPrepare;}
  assert.equal(insertRaceInjected,true);assert.equal(insertRacedAssignment.status,409);
- assert.equal(await sql.prepare('SELECT tenant_id FROM members WHERE email=?').get('insertclient@example.test'),undefined);
+ assert.equal((await sql.prepare('SELECT tenant_id FROM members WHERE email=?').get('insertclient@example.test')).tenant_id,'main');
  assert.equal(await sql.prepare('SELECT user_id FROM portal_staff WHERE user_id=?').get(ids.insertclient),undefined);
  assert.equal((await post({action:'create-ticket',subject:'Alpha help',body:'Scoped request'},tenantClientCookie)).status,201);
  const alphaTicket=(await (await get(tenantClientCookie)).json()).tickets[0].id;

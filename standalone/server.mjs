@@ -305,7 +305,9 @@ async function handle(req){const url=new URL(req.url,origin);const user=(await s
   const row=(await sql.prepare('SELECT * FROM portal_users WHERE username=?').get(username));
   if(action==='login'){
    const valid=await verifyPassword(password,row?.password_hash||dummyHash);if(!row||!valid||!row.approved)return authPage('signin','账号、密码错误，或账号尚未批准。',401);
-   return redirect(row.role==='owner'||(await sql.prepare('SELECT user_id FROM portal_staff WHERE user_id=?').get(row.id))?'/admin':'/','portal_session='+(await newSession(row.id))+'; Max-Age=28800'+cookieFlags);
+   const staff=await sql.prepare('SELECT user_id FROM portal_staff WHERE user_id=?').get(row.id),token=await newSession(row.id);
+   if(!token)return authPage('signin','账号、密码错误，或账号尚未批准。',401);
+   return redirect(row.role==='owner'||staff?'/admin':'/','portal_session='+token+'; Max-Age=28800'+cookieFlags);
   }
   if(action==='reset'){
    const code=form.get('recovery')||'';if(!row||code.length>100||digest(code)!==row.recovery_hash||!passwordValid(password))return authPage('reset','账号、恢复码或新密码不正确。',400);
@@ -335,7 +337,8 @@ async function handle(req){const url=new URL(req.url,origin);const user=(await s
    if(!target)return json({error:'账号不存在'},404);
    if(tenantId!=='main'&&!(await sql.prepare('SELECT id FROM brands WHERE id=?').get(tenantId)))return json({error:'租户不存在'},404);
    const membership=(await sql.prepare('SELECT tenant_id FROM members WHERE email=?').get(target.email)),staff=(await sql.prepare('SELECT tenant_id FROM portal_staff WHERE user_id=?').get(id));
-   if((membership&&membership.tenant_id!==tenantId)||(staff&&staff.tenant_id!==tenantId))return json({error:'账号已归属其他租户，不能直接转移'},409);
+   const mainAssignment=membership?.tenant_id==='main'&&tenantId!=='main'&&!staff;
+   if((membership&&membership.tenant_id!==tenantId&&!mainAssignment)||(staff&&staff.tenant_id!==tenantId))return json({error:'账号已归属其他租户，不能直接转移'},409);
    (await sql.exec('BEGIN IMMEDIATE'));try{
     // Serialize membership/staff assignment with wallet settlements that
     // revalidate this identity before crediting funds.
@@ -345,8 +348,10 @@ async function handle(req){const url=new URL(req.url,origin);const user=(await s
     await sql.prepare('UPDATE members SET email=email WHERE email=?').run(currentTarget.email);
     const currentMembership=await sql.prepare('SELECT tenant_id FROM members WHERE email=?').get(currentTarget.email);
     const currentStaff=await sql.prepare('SELECT tenant_id FROM portal_staff WHERE user_id=?').get(id);
-    if((currentMembership&&currentMembership.tenant_id!==tenantId)||(currentStaff&&currentStaff.tenant_id!==tenantId))throw Error('TENANT_ASSIGNMENT_CONFLICT');
-    (await sql.prepare('INSERT INTO members(email,tenant_id,created_at) VALUES (?,?,?) ON CONFLICT(email) DO NOTHING').run(currentTarget.email,tenantId,new Date().toISOString()));
+    const currentMainAssignment=currentMembership?.tenant_id==='main'&&tenantId!=='main'&&!currentStaff;
+    if((currentMembership&&currentMembership.tenant_id!==tenantId&&!currentMainAssignment)||(currentStaff&&currentStaff.tenant_id!==tenantId))throw Error('TENANT_ASSIGNMENT_CONFLICT');
+    if(currentMainAssignment)(await sql.prepare("UPDATE members SET tenant_id=? WHERE email=? AND tenant_id='main'").run(tenantId,currentTarget.email));
+    else (await sql.prepare('INSERT INTO members(email,tenant_id,created_at) VALUES (?,?,?) ON CONFLICT(email) DO NOTHING').run(currentTarget.email,tenantId,new Date().toISOString()));
     const assignedMembership=await sql.prepare('SELECT tenant_id FROM members WHERE email=?').get(currentTarget.email);
     if(!assignedMembership||assignedMembership.tenant_id!==tenantId)throw Error('TENANT_ASSIGNMENT_CONFLICT');
     const financeRevoked=await sql.prepare('DELETE FROM portal_finance_staff WHERE user_id=?').run(id);
@@ -356,9 +361,21 @@ async function handle(req){const url=new URL(req.url,origin);const user=(await s
   }
   if(method==='POST'&&['/accounts/approve','/accounts/suspend'].includes(url.pathname)){
    const f=new URLSearchParams((await bodyOf(req)).toString()),id=f.get('id')||'',approve=url.pathname.endsWith('approve');
-   const target=(await sql.prepare("SELECT u.id,u.username,p.role AS staff_role,COALESCE(p.tenant_id,m.tenant_id,'main') AS tenant_id FROM portal_users u LEFT JOIN portal_staff p ON p.user_id=u.id LEFT JOIN members m ON m.email=u.email WHERE u.id=? AND u.role='customer'").get(id));if(!target)return new Response('账号不存在',{status:404});
-   if(user.role==='tenant_owner'&&(target.tenant_id!==user.tenantId||target.staff_role))return json({error:'仅可管理本租户客户'},403);
-   (await sql.exec('BEGIN IMMEDIATE'));try{(await sql.prepare('UPDATE portal_users SET approved=? WHERE id=?').run(approve?1:0,id));(await sql.prepare('DELETE FROM portal_sessions WHERE user_id=?').run(id));(await log(user,(approve?'批准账号：':'暂停账号：')+target.username));(await sql.exec('COMMIT'))}catch(e){(await sql.exec('ROLLBACK'));throw e;}return redirect('/accounts');
+   const target=(await sql.prepare("SELECT u.id,u.username,u.email,p.role AS staff_role,p.tenant_id AS staff_tenant,m.tenant_id AS member_tenant FROM portal_users u LEFT JOIN portal_staff p ON p.user_id=u.id LEFT JOIN members m ON m.email=u.email WHERE u.id=? AND u.role='customer'").get(id));if(!target)return new Response('账号不存在',{status:404});
+   if(user.role==='tenant_owner'&&(target.member_tenant!==user.tenantId||target.staff_role))return json({error:'仅可管理本租户客户'},403);
+   (await sql.exec('BEGIN IMMEDIATE'));try{
+    const identityLock=await sql.prepare("UPDATE portal_users SET id=id WHERE id=? AND role='customer'").run(id);if(identityLock.changes!==1)throw Error('ACCOUNT_NOT_FOUND');
+    const current=await sql.prepare("SELECT u.username,u.email,p.role AS staff_role,p.tenant_id AS staff_tenant,m.tenant_id AS member_tenant FROM portal_users u LEFT JOIN portal_staff p ON p.user_id=u.id LEFT JOIN members m ON m.email=u.email WHERE u.id=? AND u.role='customer'").get(id);if(!current)throw Error('ACCOUNT_NOT_FOUND');
+    await sql.prepare('UPDATE members SET email=email WHERE email=?').run(current.email);
+    if(user.role==='tenant_owner'&&(current.member_tenant!==user.tenantId||current.staff_role))throw Error('ACCOUNT_FORBIDDEN');
+    if(approve){
+     const tenantId=current.member_tenant||current.staff_tenant||(user.role==='owner'?'main':user.tenantId);
+     if(!tenantId||(current.member_tenant&&current.member_tenant!==tenantId)||(current.staff_tenant&&current.staff_tenant!==tenantId))throw Error('TENANT_ASSIGNMENT_CONFLICT');
+     await sql.prepare('INSERT INTO members(email,tenant_id,created_at) VALUES (?,?,?) ON CONFLICT(email) DO NOTHING').run(current.email,tenantId,new Date().toISOString());
+     const assigned=await sql.prepare('SELECT tenant_id FROM members WHERE email=?').get(current.email);if(!assigned||assigned.tenant_id!==tenantId)throw Error('TENANT_ASSIGNMENT_CONFLICT');
+    }
+    await sql.prepare('UPDATE portal_users SET approved=? WHERE id=?').run(approve?1:0,id);await sql.prepare('DELETE FROM portal_sessions WHERE user_id=?').run(id);await log(user,(approve?'批准账号：':'暂停账号：')+current.username);await sql.exec('COMMIT');
+   }catch(e){await sql.exec('ROLLBACK');if(e.message==='ACCOUNT_NOT_FOUND')return new Response('账号不存在',{status:404});if(e.message==='ACCOUNT_FORBIDDEN')return json({error:'仅可管理本租户客户'},403);if(e.message==='TENANT_ASSIGNMENT_CONFLICT')return json({error:'账号租户归属冲突'},409);throw e;}return redirect('/accounts');
   }return new Response('Not found',{status:404});
  }
  if(method==='GET'&&['/','/admin'].includes(url.pathname)){
