@@ -12,5 +12,8 @@ export async function limited(bucket,max=10){
  const row=await sql.prepare('INSERT INTO portal_rate_limits VALUES (?,1,?) ON CONFLICT(bucket) DO UPDATE SET attempts=portal_rate_limits.attempts+1 RETURNING attempts').get(bucket,now+900000);
  return row.attempts>max;
 }
-export async function sessionUser(cookie){const token=cookie?.split(';').map(v=>v.trim()).find(v=>v.startsWith('portal_session='))?.slice(15);if(!token)return null;const row=(await sql.prepare('SELECT u.*,p.tenant_id,p.role AS staff_role FROM portal_users u JOIN portal_sessions s ON s.user_id=u.id LEFT JOIN portal_staff p ON p.user_id=u.id WHERE s.token_hash=? AND s.expires_at>? AND u.approved=1').get(digest(token),Date.now()));return row?{userId:row.id,displayName:row.username,email:row.email,role:row.role==='owner'?'owner':row.staff_role||'customer',tenantId:row.tenant_id||null}:null}
+export async function sessionUser(cookie){const token=cookie?.split(';').map(v=>v.trim()).find(v=>v.startsWith('portal_session='))?.slice(15);if(!token)return null;const row=(await sql.prepare(`SELECT u.*,p.tenant_id,p.role AS staff_role,f.user_id AS finance_user_id
+ FROM portal_users u JOIN portal_sessions s ON s.user_id=u.id LEFT JOIN portal_staff p ON p.user_id=u.id
+ LEFT JOIN portal_finance_staff f ON f.user_id=u.id AND f.tenant_id=p.tenant_id
+ WHERE s.token_hash=? AND s.expires_at>? AND u.approved=1`).get(digest(token),Date.now()));return row?{userId:row.id,displayName:row.username,email:row.email,role:row.role==='owner'?'owner':row.staff_role||'customer',tenantId:row.tenant_id||null,finance:Boolean(row.finance_user_id)}:null}
 export async function newSession(id){(await sql.prepare('DELETE FROM portal_sessions WHERE expires_at<?').run(Date.now()));const token=secret();(await sql.prepare('INSERT INTO portal_sessions VALUES (?,?,?)').run(digest(token),id,Date.now()+8*3600000));return token}

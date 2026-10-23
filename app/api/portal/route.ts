@@ -6,7 +6,7 @@ import { isOwner } from '../../../lib/access';
 export const dynamic='force-dynamic';
 const json=(data:unknown,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
 const defaultBrand={id:'main',name:'MASTER7',tagline:'欢迎来到服务中心',color:'#2165e8',logo:'',language:'zh-CN' as const,supportUrl:''};
-async function context(user:{email:string;role?:string;tenantId?:string|null},req?:Request){
+async function context(user:{email:string;role?:string;tenantId?:string|null;finance?:boolean},req?:Request){
  const db=getDb(),headOffice=isOwner(user.email),employee=user.role==='employee',tenantOwner=user.role==='tenant_owner',owner=headOffice||employee||tenantOwner;
  const [member]=await db.select().from(members).where(eq(members.email,user.email.toLowerCase()));
  const selected=req?new URL(req.url).searchParams.get('tenant'):null;
@@ -19,7 +19,7 @@ async function context(user:{email:string;role?:string;tenantId?:string|null},re
 export async function GET(req?:Request){
  const user=await getChatGPTUser();if(!user)return json({error:'请先登录'},401);
  try{const {owner,headOffice,employee,db,tenantId,brand}=await context(user,req);const tenantList=headOffice?await db.select().from(brands):[];
- return json({user:{name:user.displayName,email:user.email,owner,role:user.role||'customer'},tenantId,brand,tenants:headOffice?[...(tenantList.some(b=>b.id==='main')?[]:[defaultBrand]),...tenantList]:[],members:owner&&!employee?await db.select().from(members).where(eq(members.tenantId,tenantId)):[],notices:await db.select().from(notices).where(and(eq(notices.tenantId,tenantId),owner&&!employee?undefined:eq(notices.published,true))).orderBy(desc(notices.createdAt)).limit(100),tickets:await db.select().from(tickets).where(and(eq(tickets.tenantId,tenantId),owner?undefined:eq(tickets.userId,user.userId))).orderBy(desc(tickets.createdAt)).limit(200),audit:owner&&!employee?await db.select().from(audit).where(eq(audit.tenantId,tenantId)).orderBy(desc(audit.createdAt)).limit(50):[]});
+ return json({user:{name:user.displayName,email:user.email,owner,role:user.role||'customer',finance:Boolean(user.finance)},tenantId,brand,tenants:headOffice?[...(tenantList.some(b=>b.id==='main')?[]:[defaultBrand]),...tenantList]:[],members:owner&&!employee?await db.select().from(members).where(eq(members.tenantId,tenantId)):[],notices:await db.select().from(notices).where(and(eq(notices.tenantId,tenantId),owner&&!employee?undefined:eq(notices.published,true))).orderBy(desc(notices.createdAt)).limit(100),tickets:await db.select().from(tickets).where(and(eq(tickets.tenantId,tenantId),owner?undefined:eq(tickets.userId,user.userId))).orderBy(desc(tickets.createdAt)).limit(200),audit:owner&&!employee?await db.select().from(audit).where(eq(audit.tenantId,tenantId)).orderBy(desc(audit.createdAt)).limit(50):[]});
  }catch(e){if(e instanceof Error&&e.message==='TENANT_FORBIDDEN')return json({error:'无权访问其他租户'},403);if(e instanceof Error&&e.message==='TENANT_NOT_FOUND')return json({error:'品牌不存在'},404);return json({error:'资料暂时无法读取，请稍后重试。'},503);}
 }
 
