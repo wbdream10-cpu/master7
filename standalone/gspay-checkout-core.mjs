@@ -259,10 +259,15 @@ export function createGSPayCheckoutCore({
     try { safeProjection = validateCallbackProjection(channel, projection, order, context); }
     catch (error) { if (error instanceof GSPayCheckoutError) throw error; fail('GSPAY_CALLBACK_MISMATCH'); }
     const event = Object.freeze({ ...safeProjection, eventId: fingerprint(safeProjection), receivedAt: now().toISOString() });
-    await store.recordCallback(order.id, event);
+    const stored = await store.recordCallback(order.id, event);
+    const storedState = ['pending_query', 'processed', 'rejected', 'review_required'].includes(stored?.processingState)
+      ? stored.processingState : null;
     return Object.freeze({ recorded: true, orderId: order.id, eventId: event.eventId,
-      status: event.action === 'independent_query_required' ? 'pending_query'
-        : event.action === 'finance_review_required' ? 'review_required' : 'recorded',
+      status: storedState === 'review_required' ? 'review_required'
+        : storedState === 'pending_query' ? 'pending_query'
+          : storedState ? 'recorded'
+            : event.action === 'independent_query_required' ? 'pending_query'
+              : event.action === 'finance_review_required' ? 'review_required' : 'recorded',
       fundsProcessed: false });
   }
 
@@ -278,11 +283,12 @@ export function createGSPayCheckoutCore({
     let projection;
     try { projection = validateQueryProjection(await gateway.queryPayment(expected(order)), order); }
     catch {
-      order = await store.finishQuery(order.id, { queryState: 'pending', reason: 'GSPAY_QUERY_PENDING', updatedAt: now().toISOString() });
+      order = await store.finishQuery(order.id, { attemptId: order.queryAttemptId,
+        queryState: 'pending', reason: 'GSPAY_QUERY_PENDING', updatedAt: now().toISOString() });
       return publicResult(order);
     }
     if (projection.providerState !== 'paid') {
-      order = await store.finishQuery(order.id, { queryState: projection.providerState,
+      order = await store.finishQuery(order.id, { attemptId: order.queryAttemptId, queryState: projection.providerState,
         providerId: projection.paymentId, reason: projection.providerState === 'failed' ? 'GSPAY_PAYMENT_FAILED' : 'GSPAY_PAYMENT_PENDING',
         updatedAt: now().toISOString() });
       return publicResult(order);
@@ -296,7 +302,8 @@ export function createGSPayCheckoutCore({
       }
       return publicResult(outcome.order);
     } catch {
-      order = await store.finishQuery(order.id, { queryState: 'pending', reason: 'GSPAY_SETTLEMENT_RETRY', updatedAt: now().toISOString() });
+      order = await store.finishQuery(order.id, { attemptId: order.queryAttemptId,
+        queryState: 'pending', reason: 'GSPAY_SETTLEMENT_RETRY', updatedAt: now().toISOString() });
       return publicResult(order);
     }
   }
