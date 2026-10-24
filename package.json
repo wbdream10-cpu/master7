@@ -25,7 +25,8 @@
     "test:origins": "node standalone/server-origin-config.test.mjs",
     "test:owner-bootstrap": "node standalone/owner-bootstrap.test.mjs && node standalone/owner-bootstrap.test.mjs --postgres",
     "test:member-identity": "node standalone/member-identity-http.test.mjs && node standalone/member-identity-http.test.mjs --postgres",
-    "test:browser:dialogs": "node standalone/dialog-browser.test.mjs"
+    "test:browser:dialogs": "node standalone/dialog-browser.test.mjs",
+    "test:browser:journey": "node standalone/member-journey-browser.test.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

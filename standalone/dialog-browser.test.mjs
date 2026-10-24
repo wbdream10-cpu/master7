@@ -55,4 +55,4 @@ try{
   console.log('PASS: notice save persists and Escape cannot dismiss an in-flight save at '+viewport.width+'px');
   await context.close();
  }
-}finally{await browser?.close();if(server&&server.exitCode===null){server.kill('SIGTERM');await new Promise(r=>server.once('exit',r));}rmSync(dir,{recursive:true,force:true});}
+}finally{await browser?.close();if(server&&server.exitCode===null&&server.signalCode===null){server.kill('SIGTERM');await new Promise(r=>server.once('exit',r));}rmSync(dir,{recursive:true,force:true});}

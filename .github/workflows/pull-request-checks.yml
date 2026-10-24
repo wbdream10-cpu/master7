@@ -39,6 +39,9 @@ jobs:
       - name: Run desktop and mobile dialog regression
         run: npm run test:browser:dialogs
 
+      - name: Run desktop and mobile member support journey
+        run: npm run test:browser:journey
+
       - name: Run core tests
         run: npm test
 

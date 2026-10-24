@@ -26,6 +26,8 @@ npm run test:owner-bootstrap
 
 前后台弹窗的桌面／手机浏览器回归使用临时本地账号，不登录生产或读取客户数据。安装依赖并构建后，执行 `npx playwright install --with-deps chromium`、`npm run test:browser:dialogs`。已有 Chromium 时，可改用 `MASTER7_CHROMIUM_PATH=/usr/bin/chromium npm run test:browser:dialogs`；可选 `MASTER7_BROWSER_ARTIFACTS` 指定截图目录。测试覆盖双向 Tab、Escape、焦点恢复、提交中保护及公告保存。
 
+`npm run test:browser:journey` 使用同一浏览器安装方式，在桌面与手机上执行会员注册、待审批拦截、总部界面审批、会员登录、后台越权拒绝、客服申请及回复、品牌名称与主题保存后会员可见、登录后的统一对账读取，以及账号停用后的旧会话撤销。全部账号和业务资料为临时合成数据，不向真实客户或供应商发请求；这不替代生产数据库、正式域名或真实支付验收。
+
 ## Render 与云端数据库
 
 仓库根目录的 `render.yaml` 已改为新加坡免费 Node Web Service `ahbi-service-portal`，无付费持久磁盘。数据使用外部 PostgreSQL；配置不是部署证明，也不保证账号一定有可用免费配额。
