@@ -45,6 +45,15 @@ jobs:
       - name: Run storage tests
         run: npm run test:storage
 
+      - name: Run production startup guards
+        run: npm run test:production
+
+      - name: Run withdrawal tests
+        run: npm run test:withdrawals
+
+      - name: Run finance reconciliation tests
+        run: npm run test:finance-reconciliation
+
       - name: Run payment contract tests
         run: npm run test:payments
 

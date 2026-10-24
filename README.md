@@ -13,6 +13,7 @@ npm test
 npm run test:postgres
 npm run test:migrations
 npm run test:storage
+npm run test:production
 npm run test:payments
 npm run test:wallet
 npm run test:wallet:http
@@ -30,7 +31,7 @@ npm run test:owner-bootstrap
 
 已创建独立 Supabase 项目 `ahbi-service-portal`（新加坡，项目 ID `aarihmvlnlssxulktbmb`），创建时工具报价 US$0/月。仅建立 `portal_private` 下的 13 张空表；未创建生产账号、导入旧数据或连接实际外部服务。
 
-正式启动必须安全配置 `PORTAL_POSTGRES_URL`。它是服务器秘密，不能发到聊天、提交 GitHub 或放入前端。服务端强制 TLS 证书校验；需要专用 CA 时另设置 `PORTAL_POSTGRES_CA_FILE`。Render 缺少数据库 URL 时直接拒绝启动，防止误用临时 SQLite。完整步骤、权限和验证限制见 [PostgreSQL 云端说明](docs/POSTGRES.md)。
+正式启动必须安全配置 `PORTAL_POSTGRES_URL`。它是服务器秘密，不能发到聊天、提交 GitHub 或放入前端。服务端强制 TLS 证书校验；需要专用 CA 时另设置 `PORTAL_POSTGRES_CA_FILE`。`NODE_ENV=production`、Render 或 Railway 托管环境缺少数据库 URL 时直接拒绝启动，防止误用临时 SQLite，也禁止嵌入式测试数据库。网页服务在这些环境中还必须显式设置 HTTPS `PUBLIC_ORIGIN`，包括拒绝 HTTP 回环地址；来源和允许列表在数据库初始化、迁移前校验。生产 CLI 仅校验数据库配置，不要求网页来源。完整步骤、权限和验证限制见 [PostgreSQL 云端说明](docs/POSTGRES.md)。
 
 如同一部署要接受多个 HTTPS 自定义域名，可在域名 DNS、托管绑定和 TLS 证书都已准备并验收后，在服务环境中配置 `PORTAL_ALLOWED_ORIGINS`，值为逗号分隔的纯 origin，例如 `https://master7.vip,https://master7.best`。服务会将这些精确来源加入 POST 请求的来源校验；不接受路径、凭据或非 HTTPS 外部来源。`PUBLIC_ORIGIN` 仍是主来源，且允许列表必须使用相同协议。此设置只放行来源校验，不会绑定域名、配置证书、改 DNS 或解除 Cloudflare 冻结；未准备好前不要设置正式域名。
 
