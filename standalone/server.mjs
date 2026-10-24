@@ -18,6 +18,32 @@ import {BankReceiptUploadError,createBankDeposits,readBankReceiptBody} from './b
 import {createWithdrawals} from './withdrawals.mjs';
 import {createFinanceReconciliation} from './finance-reconciliation.mjs';
 const originAllowed=value=>typeof value==='string'&&allowedOrigins.has(value);
+const serviceOnlyMode=()=>Boolean(process.env.RENDER_EXTERNAL_URL);
+const serviceOnlySensitivePath=path=>[
+ '/api/v1/deposit-requests',
+ '/api/v1/bank-transfer/config',
+ '/api/v1/bank-deposits',
+ '/api/v1/finance-staff',
+ '/api/v1/finance-metrics',
+ '/api/v1/withdrawals/config',
+ '/api/v1/withdrawals',
+ '/api/v1/withdrawals/export',
+ '/api/v1/finance-reconciliation',
+ '/api/v1/finance-reconciliation/export',
+ '/api/v1/sponsored-games',
+ '/api/v1/payment-channels',
+ '/api/v1/wallet',
+ '/api/v1/payment-records',
+ '/api/v1/payment-records/export',
+ '/api/v1/payments/gspay/config',
+ '/api/v1/payments/vpay/config',
+ '/api/v1/payments/vpay/orders',
+ '/api/v1/payment-callbacks/vpay/payment',
+].includes(path)
+ || path.startsWith('/api/v1/bank-deposits/')
+ || path.startsWith('/api/v1/withdrawals/')
+ || path.startsWith('/api/v1/payment-callbacks/gspay/');
+
 const cookieFlags='; Path=/; HttpOnly; SameSite=Lax'+(origin.protocol==='https:'?'; Secure':'');
 const dummyHash=await hashPassword('unknown-account-password-never-used');
 const escape=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -77,6 +103,7 @@ const withdrawals=createWithdrawals();
 const financeReconciliation=createFinanceReconciliation();
 async function dispatch(req){
  const url=new URL(req.url,origin);
+ if(serviceOnlyMode()&&serviceOnlySensitivePath(url.pathname))return json({error:'SERVICE_ONLY_MODE',message:'This deployment is limited to membership, support, branding and access-management features.'},410);
  if(unavailableGspayPublicPaths.has(url.pathname))return json({error:'Not found'},404);
  const gspayChannel=gspayCallbackPaths.get(url.pathname);
  if(gspayChannel){
