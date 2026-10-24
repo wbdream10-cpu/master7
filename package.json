@@ -27,7 +27,9 @@
     "test:owner-bootstrap": "node standalone/owner-bootstrap.test.mjs && node standalone/owner-bootstrap.test.mjs --postgres",
     "test:member-identity": "node standalone/member-identity-http.test.mjs && node standalone/member-identity-http.test.mjs --postgres",
     "verify:deployment": "node standalone/verify-deployment.mjs",
-    "test:deployment": "node --test standalone/verify-deployment.test.mjs"
+    "test:deployment": "node --test standalone/verify-deployment.test.mjs",
+    "test:browser:dialogs": "node standalone/dialog-browser.test.mjs",
+    "test:browser:journey": "node standalone/member-journey-browser.test.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
@@ -38,6 +40,7 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.10",
-    "esbuild": "0.28.2"
+    "esbuild": "0.28.2",
+    "playwright": "1.58.2"
   }
 }

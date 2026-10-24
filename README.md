@@ -25,6 +25,10 @@ npm run test:owner-bootstrap
 
 源码不依赖 ChatGPT 登录或 Sites 运行环境。数据库迁移创建表结构并补充字段，不导入任何旧数据。测试使用临时数据库，结束后删除测试数据。
 
+前后台弹窗的桌面／手机浏览器回归使用临时本地账号，不登录生产或读取客户数据。安装依赖并构建后，执行 `npx playwright install --with-deps chromium`、`npm run test:browser:dialogs`。已有 Chromium 时，可改用 `MASTER7_CHROMIUM_PATH=/usr/bin/chromium npm run test:browser:dialogs`；可选 `MASTER7_BROWSER_ARTIFACTS` 指定截图目录。测试覆盖双向 Tab、Escape、焦点恢复、提交中保护及公告保存。
+
+`npm run test:browser:journey` 使用同一浏览器安装方式，在桌面与手机上执行会员注册、待审批拦截、总部界面审批、会员登录、后台越权拒绝、客服申请及回复、品牌名称与主题保存后会员可见、登录后的统一对账读取，以及账号停用后的旧会话撤销。全部账号和业务资料为临时合成数据，不向真实客户或供应商发请求；这不替代生产数据库、正式域名或真实支付验收。
+
 ## Render 与云端数据库
 
 发布后可执行只读检查：`npm run verify:deployment -- --origin https://ahbi-service-portal.onrender.com --commit FULL_SHA --assets-dir standalone/dist`。将 `FULL_SHA` 替换为本次预期发布的完整 40 位提交，使用该提交构建出的资源目录。工具核对数据库就绪、线上提交、登录表单、匿名后台跳转及 JS／CSS／Logo 哈希；失败退出码为 1，参数错误为 2。只发 GET，不跟随跳转，不登录、不部署、不操作资金。使用环境代理时可加 `NODE_USE_ENV_PROXY=1`，保持 TLS 校验。
