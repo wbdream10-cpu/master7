@@ -33,6 +33,12 @@ jobs:
       - name: Build production assets
         run: npm run build
 
+      - name: Install browser for dialog regression
+        run: npx playwright install --with-deps chromium
+
+      - name: Run desktop and mobile dialog regression
+        run: npm run test:browser:dialogs
+
       - name: Run core tests
         run: npm test
 

@@ -196,3 +196,6 @@ button:focus-visible,a:focus-visible{outline-color:#4f8fc9}
 @media(max-width:900px){.withdrawal-row dl{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:760px){.withdrawal-disabled{margin:15px 17px 0}.withdrawal-balances{grid-template-columns:1fr;padding:17px 17px 0}.withdrawal-form{padding:17px}.withdrawal-form-grid{grid-template-columns:1fr}.withdrawal-list{padding:15px 17px 17px}.withdrawal-row dl{grid-template-columns:1fr}.withdrawal-actions{align-items:stretch}.withdrawal-actions button{width:100%}.withdrawal-heading-actions{width:100%}.withdrawal-heading-actions .secondary{flex:1}}
 @media(max-width:430px){.withdrawal-row-head{flex-direction:column}}
+
+/* Native modal focus containment and top-layer backdrop. */
+dialog.modal{padding:0;width:min(560px,calc(100vw - 24px));margin:auto;color:inherit}dialog.modal::backdrop{background:#010611d6;backdrop-filter:blur(4px)}

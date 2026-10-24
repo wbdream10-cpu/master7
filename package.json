@@ -24,7 +24,8 @@
     "test:finance-reconciliation": "node standalone/finance-reconciliation.test.mjs && node standalone/finance-reconciliation.test.mjs --postgres && node standalone/finance-reconciliation-http.test.mjs",
     "test:origins": "node standalone/server-origin-config.test.mjs",
     "test:owner-bootstrap": "node standalone/owner-bootstrap.test.mjs && node standalone/owner-bootstrap.test.mjs --postgres",
-    "test:member-identity": "node standalone/member-identity-http.test.mjs && node standalone/member-identity-http.test.mjs --postgres"
+    "test:member-identity": "node standalone/member-identity-http.test.mjs && node standalone/member-identity-http.test.mjs --postgres",
+    "test:browser:dialogs": "node standalone/dialog-browser.test.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
@@ -35,6 +36,7 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.10",
-    "esbuild": "0.28.2"
+    "esbuild": "0.28.2",
+    "playwright": "1.58.2"
   }
 }

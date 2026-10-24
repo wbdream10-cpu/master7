@@ -24,6 +24,8 @@ npm run test:owner-bootstrap
 
 源码不依赖 ChatGPT 登录或 Sites 运行环境。数据库迁移创建表结构并补充字段，不导入任何旧数据。测试使用临时数据库，结束后删除测试数据。
 
+前后台弹窗的桌面／手机浏览器回归使用临时本地账号，不登录生产或读取客户数据。安装依赖并构建后，执行 `npx playwright install --with-deps chromium`、`npm run test:browser:dialogs`。已有 Chromium 时，可改用 `MASTER7_CHROMIUM_PATH=/usr/bin/chromium npm run test:browser:dialogs`；可选 `MASTER7_BROWSER_ARTIFACTS` 指定截图目录。测试覆盖双向 Tab、Escape、焦点恢复、提交中保护及公告保存。
+
 ## Render 与云端数据库
 
 仓库根目录的 `render.yaml` 已改为新加坡免费 Node Web Service `ahbi-service-portal`，无付费持久磁盘。数据使用外部 PostgreSQL；配置不是部署证明，也不保证账号一定有可用免费配额。
