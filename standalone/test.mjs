@@ -5,7 +5,7 @@ import {mkdtempSync,rmSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawn} from 'node:child_process';
-delete process.env.PORTAL_POSTGRES_URL;delete process.env.RENDER;process.env.NODE_ENV='test';
+delete process.env.PORTAL_POSTGRES_URL;delete process.env.RENDER;delete process.env.PORTAL_ALLOWED_ORIGINS;process.env.NODE_ENV='test';
 const postgresTest=process.argv.includes('--postgres');
 if(postgresTest)process.env.PORTAL_TEST_POSTGRES='1';else delete process.env.PORTAL_TEST_POSTGRES;
 const dir=mkdtempSync(join(tmpdir(),'portal-test-'));process.env.PORTAL_DATABASE=join(dir,'portal.sqlite');process.env.PUBLIC_ORIGIN='http://127.0.0.1:8080';
