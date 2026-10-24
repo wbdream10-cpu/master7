@@ -19,8 +19,9 @@
 
 1. 设置非空 PORTAL_POSTGRES_URL：使用 pg 驱动和外部 PostgreSQL。
 2. 普通本地开发未设置该变量：使用原有 SQLite，PORTAL_DATABASE 指定本地文件路径。
-3. Render 环境缺少 PORTAL_POSTGRES_URL：启动失败，不回退到临时 SQLite。
-4. PORTAL_TEST_POSTGRES 仅供自动测试使用嵌入式 PGlite；生产与 Render 禁用该测试驱动。
+3. `NODE_ENV=production`、Render 或 Railway 托管环境缺少 PORTAL_POSTGRES_URL：启动失败，不回退到临时 SQLite。Railway 通过其环境、项目或服务标识识别；自托管生产必须明确设置 `NODE_ENV=production`。
+4. PORTAL_TEST_POSTGRES 仅供自动测试使用嵌入式 PGlite；上述生产及托管环境禁用该测试驱动。
+5. 网页服务在上述环境必须显式配置 HTTPS `PUBLIC_ORIGIN`，来源与允许列表错误会在数据库初始化和迁移前拒绝启动。`admin.mjs` 等非网页 CLI 不要求来源变量，但仍执行生产数据库保护。
 
 查询值使用参数绑定。应用生成的 SQLite 参数和冲突目标转换为 PostgreSQL 格式；仅对项目已有查询及其表名适配，不是接受任意外部 SQL 的执行入口。业务表始终限定 portal_private，不依赖连接池会话保留 search_path。事务使用同一个请求所属连接，异常时回滚并归还连接。
 

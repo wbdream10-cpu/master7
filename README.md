@@ -13,6 +13,7 @@ npm test
 npm run test:postgres
 npm run test:migrations
 npm run test:storage
+npm run test:production
 npm run test:payments
 npm run test:wallet
 npm run test:wallet:http
@@ -24,13 +25,21 @@ npm run test:owner-bootstrap
 
 源码不依赖 ChatGPT 登录或 Sites 运行环境。数据库迁移创建表结构并补充字段，不导入任何旧数据。测试使用临时数据库，结束后删除测试数据。
 
+前后台弹窗的桌面／手机浏览器回归使用临时本地账号，不登录生产或读取客户数据。安装依赖并构建后，执行 `npx playwright install --with-deps chromium`、`npm run test:browser:dialogs`。已有 Chromium 时，可改用 `MASTER7_CHROMIUM_PATH=/usr/bin/chromium npm run test:browser:dialogs`；可选 `MASTER7_BROWSER_ARTIFACTS` 指定截图目录。测试覆盖双向 Tab、Escape、焦点恢复、提交中保护及公告保存。
+
+`npm run test:browser:journey` 使用同一浏览器安装方式，在桌面与手机上执行会员注册、待审批拦截、总部界面审批、会员登录、后台越权拒绝、客服申请及回复、品牌名称与主题保存后会员可见、登录后的统一对账读取，以及账号停用后的旧会话撤销。全部账号和业务资料为临时合成数据，不向真实客户或供应商发请求；这不替代生产数据库、正式域名或真实支付验收。
+
 ## Render 与云端数据库
+
+发布后可执行只读检查：`npm run verify:deployment -- --origin https://ahbi-service-portal.onrender.com --commit FULL_SHA --assets-dir standalone/dist`。将 `FULL_SHA` 替换为本次预期发布的完整 40 位提交，使用该提交构建出的资源目录。工具核对数据库就绪、线上提交、登录表单、匿名后台跳转及 JS／CSS／Logo 哈希；失败退出码为 1，参数错误为 2。只发 GET，不跟随跳转，不登录、不部署、不操作资金。使用环境代理时可加 `NODE_USE_ENV_PROXY=1`，保持 TLS 校验。
+
+省略 `--assets-dir` 时仅检查资源可读取，不证明资源与预期构建一致，报告会明确标记。公开检查通过也不能代替登录后流程、备份恢复、供应商或交易验收。`npm run test:deployment` 使用本地 HTTP fixture 验证这些失败情况，不访问生产。
 
 仓库根目录的 `render.yaml` 已改为新加坡免费 Node Web Service `ahbi-service-portal`，无付费持久磁盘。数据使用外部 PostgreSQL；配置不是部署证明，也不保证账号一定有可用免费配额。
 
 已创建独立 Supabase 项目 `ahbi-service-portal`（新加坡，项目 ID `aarihmvlnlssxulktbmb`），创建时工具报价 US$0/月。仅建立 `portal_private` 下的 13 张空表；未创建生产账号、导入旧数据或连接实际外部服务。
 
-正式启动必须安全配置 `PORTAL_POSTGRES_URL`。它是服务器秘密，不能发到聊天、提交 GitHub 或放入前端。服务端强制 TLS 证书校验；需要专用 CA 时另设置 `PORTAL_POSTGRES_CA_FILE`。Render 缺少数据库 URL 时直接拒绝启动，防止误用临时 SQLite。完整步骤、权限和验证限制见 [PostgreSQL 云端说明](docs/POSTGRES.md)。
+正式启动必须安全配置 `PORTAL_POSTGRES_URL`。它是服务器秘密，不能发到聊天、提交 GitHub 或放入前端。服务端强制 TLS 证书校验；需要专用 CA 时另设置 `PORTAL_POSTGRES_CA_FILE`。`NODE_ENV=production`、Render 或 Railway 托管环境缺少数据库 URL 时直接拒绝启动，防止误用临时 SQLite，也禁止嵌入式测试数据库。网页服务在这些环境中还必须显式设置 HTTPS `PUBLIC_ORIGIN`，包括拒绝 HTTP 回环地址；来源和允许列表在数据库初始化、迁移前校验。生产 CLI 仅校验数据库配置，不要求网页来源。完整步骤、权限和验证限制见 [PostgreSQL 云端说明](docs/POSTGRES.md)。
 
 如同一部署要接受多个 HTTPS 自定义域名，可在域名 DNS、托管绑定和 TLS 证书都已准备并验收后，在服务环境中配置 `PORTAL_ALLOWED_ORIGINS`，值为逗号分隔的纯 origin，例如 `https://master7.vip,https://master7.best`。服务会将这些精确来源加入 POST 请求的来源校验；不接受路径、凭据或非 HTTPS 外部来源。`PUBLIC_ORIGIN` 仍是主来源，且允许列表必须使用相同协议。此设置只放行来源校验，不会绑定域名、配置证书、改 DNS 或解除 Cloudflare 冻结；未准备好前不要设置正式域名。
 

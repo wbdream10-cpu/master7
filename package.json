@@ -13,6 +13,7 @@
     "test:postgres": "node standalone/test.mjs --postgres",
     "test:migrations": "node standalone/brand-migration.test.mjs",
     "test:storage": "node standalone/storage-config.test.mjs",
+    "test:production": "node standalone/production.test.mjs",
     "test:payments": "node standalone/payment-channels.test.mjs && node standalone/vpay-contract.test.mjs && node standalone/gspay-contract.test.mjs && node standalone/gspay-runtime.test.mjs && node standalone/gspay-runtime-http.test.mjs && node standalone/gspay-provider.test.mjs && node standalone/gspay-checkout-core.test.mjs && node standalone/gspay-schema.test.mjs && node standalone/gspay-schema.test.mjs --postgres && node standalone/gspay-store.test.mjs && node standalone/gspay-store.test.mjs --postgres",
     "test:vpay-runtime": "node standalone/vpay-store.test.mjs && node standalone/vpay-store.test.mjs --postgres && node standalone/vpay-recovery.test.mjs && node standalone/vpay-recovery.test.mjs --postgres",
     "test:wallet": "node standalone/wallet.test.mjs && node standalone/wallet.test.mjs --postgres",
@@ -24,7 +25,11 @@
     "test:finance-reconciliation": "node standalone/finance-reconciliation.test.mjs && node standalone/finance-reconciliation.test.mjs --postgres && node standalone/finance-reconciliation-http.test.mjs",
     "test:origins": "node standalone/server-origin-config.test.mjs",
     "test:owner-bootstrap": "node standalone/owner-bootstrap.test.mjs && node standalone/owner-bootstrap.test.mjs --postgres",
-    "test:member-identity": "node standalone/member-identity-http.test.mjs && node standalone/member-identity-http.test.mjs --postgres"
+    "test:member-identity": "node standalone/member-identity-http.test.mjs && node standalone/member-identity-http.test.mjs --postgres",
+    "verify:deployment": "node standalone/verify-deployment.mjs",
+    "test:deployment": "node --test standalone/verify-deployment.test.mjs",
+    "test:browser:dialogs": "node standalone/dialog-browser.test.mjs",
+    "test:browser:journey": "node standalone/member-journey-browser.test.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
@@ -35,6 +40,7 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.10",
-    "esbuild": "0.28.2"
+    "esbuild": "0.28.2",
+    "playwright": "1.58.2"
   }
 }

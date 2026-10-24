@@ -33,6 +33,15 @@ jobs:
       - name: Build production assets
         run: npm run build
 
+      - name: Install browser for dialog regression
+        run: npx playwright install --with-deps chromium
+
+      - name: Run desktop and mobile dialog regression
+        run: npm run test:browser:dialogs
+
+      - name: Run desktop and mobile member support journey
+        run: npm run test:browser:journey
+
       - name: Run core tests
         run: npm test
 
@@ -44,6 +53,18 @@ jobs:
 
       - name: Run storage tests
         run: npm run test:storage
+
+      - name: Run production startup guards
+        run: npm run test:production
+
+      - name: Test deployment verification failures
+        run: npm run test:deployment
+
+      - name: Run withdrawal tests
+        run: npm run test:withdrawals
+
+      - name: Run finance reconciliation tests
+        run: npm run test:finance-reconciliation
 
       - name: Run payment contract tests
         run: npm run test:payments

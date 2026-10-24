@@ -1,3 +1,4 @@
+import {origin,allowedOrigins} from './server-config.mjs';
 import {createServer} from 'node:http';
 import {randomUUID,timingSafeEqual} from 'node:crypto';
 import {readFileSync} from 'node:fs';
@@ -16,27 +17,6 @@ import {createSponsoredGamesHandler} from './sponsored-games.mjs';
 import {BankReceiptUploadError,createBankDeposits,readBankReceiptBody} from './bank-deposits.mjs';
 import {createWithdrawals} from './withdrawals.mjs';
 import {createFinanceReconciliation} from './finance-reconciliation.mjs';
-const loopbackHosts=new Set(['127.0.0.1','localhost','[::1]']);
-function configuredWebOrigin(value,name){
- const raw=String(value||'').trim();
- let parsed;try{parsed=new URL(raw);}catch{throw Error(`${name} must be a valid HTTP(S) origin.`);}
- if(!['http:','https:'].includes(parsed.protocol)||parsed.username||parsed.password||parsed.pathname!=='/'||parsed.search||parsed.hash)throw Error(`${name} must contain only an HTTP(S) origin, without credentials, path, query, or fragment.`);
- if(parsed.protocol!=='https:'&&!loopbackHosts.has(parsed.hostname))throw Error(`${name} must use HTTPS outside local development.`);
- return parsed;
-}
-const origin=configuredWebOrigin(process.env.PUBLIC_ORIGIN||'http://127.0.0.1:8080','PUBLIC_ORIGIN');
-const allowedOrigins=new Set([origin.origin]);
-const allowedOriginConfig=String(process.env.PORTAL_ALLOWED_ORIGINS||'').trim();
-if(allowedOriginConfig.length>2000)throw Error('PORTAL_ALLOWED_ORIGINS is too long.');
-if(allowedOriginConfig){
- const entries=allowedOriginConfig.split(',').map(value=>value.trim());
- if(entries.length>20||entries.some(value=>!value))throw Error('PORTAL_ALLOWED_ORIGINS must contain at most 20 comma-separated origins.');
- for(const entry of entries){
-  const allowed=configuredWebOrigin(entry,'PORTAL_ALLOWED_ORIGINS');
-  if(allowed.protocol!==origin.protocol)throw Error('PORTAL_ALLOWED_ORIGINS must use the same protocol as PUBLIC_ORIGIN.');
-  allowedOrigins.add(allowed.origin);
- }
-}
 const originAllowed=value=>typeof value==='string'&&allowedOrigins.has(value);
 const cookieFlags='; Path=/; HttpOnly; SameSite=Lax'+(origin.protocol==='https:'?'; Secure':'');
 const dummyHash=await hashPassword('unknown-account-password-never-used');

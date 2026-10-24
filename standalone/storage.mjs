@@ -1,14 +1,13 @@
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {readFileSync,mkdirSync,chmodSync} from 'node:fs';
 import {resolve,dirname} from 'node:path';
+import {validateStorageConfig} from './production.mjs';
+validateStorageConfig();
 const scope=new AsyncLocalStorage();
 let queue=Promise.resolve();
 const testPg=process.env.PORTAL_TEST_POSTGRES==='1';
 const postgresUrl=process.env.PORTAL_POSTGRES_URL;
-if(process.env.RENDER&&!postgresUrl)throw Error('Render requires PORTAL_POSTGRES_URL; refusing ephemeral SQLite storage.');
-if(Object.hasOwn(process.env,'PORTAL_POSTGRES_URL')&&!postgresUrl?.trim())throw Error('PORTAL_POSTGRES_URL is empty.');
 export const storageKind=testPg?'pglite':postgresUrl?'postgres':'sqlite';
-if(testPg&&(process.env.RENDER||process.env.NODE_ENV==='production'))throw Error('The embedded Postgres test driver cannot be used in production.');
 let sqlite,pool,embedded,closed=false;
 if(storageKind==='sqlite'){
  const {DatabaseSync}=await import('node:sqlite');
