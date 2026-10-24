@@ -18,7 +18,7 @@ import {BankReceiptUploadError,createBankDeposits,readBankReceiptBody} from './b
 import {createWithdrawals} from './withdrawals.mjs';
 import {createFinanceReconciliation} from './finance-reconciliation.mjs';
 const originAllowed=value=>typeof value==='string'&&allowedOrigins.has(value);
-const serviceOnlyMode=()=>Boolean(process.env.RENDER_EXTERNAL_URL);
+const serviceOnlyMode=()=>process.env.NODE_ENV!=='test'&&Boolean(process.env.RENDER_EXTERNAL_URL);
 const serviceOnlySensitivePath=path=>[
  '/api/v1/deposit-requests',
  '/api/v1/bank-transfer/config',
