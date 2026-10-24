@@ -48,6 +48,9 @@ jobs:
       - name: Run production startup guards
         run: npm run test:production
 
+      - name: Test deployment verification failures
+        run: npm run test:deployment
+
       - name: Run withdrawal tests
         run: npm run test:withdrawals
 

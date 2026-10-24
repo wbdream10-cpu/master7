@@ -27,6 +27,10 @@ npm run test:owner-bootstrap
 
 ## Render 与云端数据库
 
+发布后可执行只读检查：`npm run verify:deployment -- --origin https://ahbi-service-portal.onrender.com --commit FULL_SHA --assets-dir standalone/dist`。将 `FULL_SHA` 替换为本次预期发布的完整 40 位提交，使用该提交构建出的资源目录。工具核对数据库就绪、线上提交、登录表单、匿名后台跳转及 JS／CSS／Logo 哈希；失败退出码为 1，参数错误为 2。只发 GET，不跟随跳转，不登录、不部署、不操作资金。使用环境代理时可加 `NODE_USE_ENV_PROXY=1`，保持 TLS 校验。
+
+省略 `--assets-dir` 时仅检查资源可读取，不证明资源与预期构建一致，报告会明确标记。公开检查通过也不能代替登录后流程、备份恢复、供应商或交易验收。`npm run test:deployment` 使用本地 HTTP fixture 验证这些失败情况，不访问生产。
+
 仓库根目录的 `render.yaml` 已改为新加坡免费 Node Web Service `ahbi-service-portal`，无付费持久磁盘。数据使用外部 PostgreSQL；配置不是部署证明，也不保证账号一定有可用免费配额。
 
 已创建独立 Supabase 项目 `ahbi-service-portal`（新加坡，项目 ID `aarihmvlnlssxulktbmb`），创建时工具报价 US$0/月。仅建立 `portal_private` 下的 13 张空表；未创建生产账号、导入旧数据或连接实际外部服务。

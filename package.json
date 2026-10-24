@@ -25,7 +25,9 @@
     "test:finance-reconciliation": "node standalone/finance-reconciliation.test.mjs && node standalone/finance-reconciliation.test.mjs --postgres && node standalone/finance-reconciliation-http.test.mjs",
     "test:origins": "node standalone/server-origin-config.test.mjs",
     "test:owner-bootstrap": "node standalone/owner-bootstrap.test.mjs && node standalone/owner-bootstrap.test.mjs --postgres",
-    "test:member-identity": "node standalone/member-identity-http.test.mjs && node standalone/member-identity-http.test.mjs --postgres"
+    "test:member-identity": "node standalone/member-identity-http.test.mjs && node standalone/member-identity-http.test.mjs --postgres",
+    "verify:deployment": "node standalone/verify-deployment.mjs",
+    "test:deployment": "node --test standalone/verify-deployment.test.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
