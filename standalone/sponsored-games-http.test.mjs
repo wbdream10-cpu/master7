@@ -3,6 +3,11 @@ import { mkdtempSync,rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// Isolated synthetic HTTP fixture only. The hosted portal stays service-only.
+delete process.env.PORTAL_POSTGRES_URL;
+delete process.env.RENDER;
+process.env.NODE_ENV = 'test';
+
 const directory = mkdtempSync(join(tmpdir(), 'master7-sponsored-games-http-'));
 const nativeFetch = globalThis.fetch;
 process.env.PUBLIC_ORIGIN = 'http://127.0.0.1:8080';
