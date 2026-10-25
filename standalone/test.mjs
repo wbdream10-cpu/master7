@@ -22,7 +22,13 @@ const get=(cookie='',tenant='')=>req('/api/portal'+(tenant?'?tenant='+tenant:'')
 const paymentChannels=(cookie='',tenant='')=>req('/api/v1/payment-channels'+(tenant?'?tenant='+tenant:''),{headers:{cookie}});
 const session=r=>r.headers.get('set-cookie').split(';')[0];
 try{
- assert.equal((await req('/')).status,303);assert.equal((await req('/admin')).status,303);assert.equal((await get()).status,401);assert.equal((await req('/health')).status,200);
+ const publicHome=await req('/');assert.equal(publicHome.status,200);const publicHomeHtml=await publicHome.text();
+ assert(publicHomeHtml.includes('MASTER7 客户服务门户'));
+ assert(publicHomeHtml.includes('href="/signin"'));
+ assert(publicHomeHtml.includes('href="/register"'));
+ assert(publicHomeHtml.includes('id="services"'));
+ assert(!publicHomeHtml.includes('src="/assets/client.js"'));
+ assert.equal((await req('/admin')).status,303);assert.equal((await get()).status,401);assert.equal((await req('/health')).status,200);
  assert.equal((await paymentChannels()).status,401);assert.equal(gatewayStatusReads,0);
  assert.equal((await req('/api/v1/payment-channels',{method:'POST'})).status,405);
  for(const path of ['/api/v1/wallet','/api/v1/payment-records','/api/v1/payment-records/export'])assert.equal((await req(path)).status,401);
