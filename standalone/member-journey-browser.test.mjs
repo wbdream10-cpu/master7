@@ -21,6 +21,29 @@ try{
  server=spawn(process.execPath,['standalone/server.mjs'],{cwd:root,env,stdio:['ignore','pipe','pipe']});
  await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Local server timeout')),12000);server.stdout.on('data',chunk=>{if(String(chunk).includes('MASTER7 listening')){clearTimeout(timer);resolve();}});server.on('exit',()=>{clearTimeout(timer);reject(Error('Local server exited'));});});
  browser=await chromium.launch({executablePath:process.env.MASTER7_CHROMIUM_PATH||undefined,headless:true,args:['--no-sandbox']});
+ // A fresh navigation after each resize prevents stale layout measurements from
+ // being mistaken for horizontal overflow in the public service-only homepage.
+ const publicContext=await browser.newContext();
+ try{
+  const home=await publicContext.newPage();
+  for(const width of [320,360,390,414,768,1440]){
+   await home.setViewportSize({width,height:900});
+   await home.goto(base+'/',{waitUntil:'load'});
+   await home.locator('#m7-home-title').waitFor();
+   const sizes=await home.evaluate(()=>({
+    viewport:window.innerWidth,
+    client:document.documentElement.clientWidth,
+    rootScroll:document.documentElement.scrollWidth,
+    bodyScroll:document.body.scrollWidth
+   }));
+   assert.equal(sizes.viewport,width,'browser viewport should match the test width');
+   assert(sizes.rootScroll<=sizes.client,'public homepage root overflow at '+width+'px: '+JSON.stringify(sizes));
+   assert(sizes.bodyScroll<=sizes.client,'public homepage body overflow at '+width+'px: '+JSON.stringify(sizes));
+   const routes=await home.locator('.m7-home-actions a').evaluateAll(anchors=>anchors.map(a=>new URL(a.href).pathname));
+   assert.deepEqual(routes,['/signin','/register'],'public service links must use local protected routes');
+   console.log('PASS public homepage responsive '+width+'px: no horizontal overflow; sign-in and registration links');
+  }
+ }finally{await publicContext.close();}
  for(const viewport of [{width:1440,height:1000},{width:390,height:844}]){
   const ownerContext=await browser.newContext({viewport}),memberContext=await browser.newContext({viewport});
   const owner=await ownerContext.newPage(),member=await memberContext.newPage();
