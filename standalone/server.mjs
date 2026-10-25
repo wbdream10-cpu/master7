@@ -1,5 +1,6 @@
 import {origin,allowedOrigins} from './server-config.mjs';
 import {createServer} from 'node:http';
+import {publicHomeBody} from './public-home.mjs';
 import {randomUUID,timingSafeEqual} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
@@ -387,7 +388,7 @@ async function handle(req){const url=new URL(req.url,origin);const user=(await s
   }return new Response('Not found',{status:404});
  }
  if(method==='GET'&&['/','/admin'].includes(url.pathname)){
-  if(!user)return redirect('/signin');if(url.pathname==='/admin'&&!['owner','tenant_owner','employee'].includes(user.role))return new Response('无管理权限',{status:403});
+  if(!user){if(url.pathname==='/')return page('MASTER7 客户服务门户',publicHomeBody());return redirect('/signin');}if(url.pathname==='/admin'&&!['owner','tenant_owner','employee'].includes(user.role))return new Response('无管理权限',{status:403});
   return page(url.pathname==='/admin'?'MASTER7 运营后台':'MASTER7 会员平台','<div id="root"></div><script type="module" src="/assets/client.js"></script>');
  }
  return new Response('Not found',{status:404});
