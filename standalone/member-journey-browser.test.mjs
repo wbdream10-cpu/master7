@@ -39,9 +39,24 @@ try{
    assert.equal(sizes.viewport,width,'browser viewport should match the test width');
    assert(sizes.rootScroll<=sizes.client,'public homepage root overflow at '+width+'px: '+JSON.stringify(sizes));
    assert(sizes.bodyScroll<=sizes.client,'public homepage body overflow at '+width+'px: '+JSON.stringify(sizes));
-   const routes=await home.locator('.m7-home-actions a').evaluateAll(anchors=>anchors.map(a=>new URL(a.href).pathname));
-   assert.deepEqual(routes,['/signin','/register'],'public service links must use local protected routes');
-   console.log('PASS public homepage responsive '+width+'px: no horizontal overflow; sign-in and registration links');
+   const nav=await home.locator('.m7-home-nav').evaluate(header=>{
+    const style=getComputedStyle(header),bounds=header.getBoundingClientRect();
+    return {
+     background:style.backgroundColor,position:style.position,
+     childrenFit:[...header.querySelectorAll('a')].every(link=>{
+      const rect=link.getBoundingClientRect();
+      return rect.top>=bounds.top&&rect.bottom<=bounds.bottom;
+     }),
+     heroBelow:document.querySelector('.m7-home-hero').getBoundingClientRect().top>=bounds.bottom
+    };
+   });
+   assert.equal(nav.background,'rgba(0, 0, 0, 0)','public nav must preserve the dark page background at '+width+'px');
+   assert.equal(nav.position,'static','public nav must not inherit sticky positioning at '+width+'px');
+   assert(nav.childrenFit,'public nav must contain its brand and links at '+width+'px');
+   assert(nav.heroBelow,'public hero must follow the full nav height at '+width+'px');
+   const routes=await home.locator('.m7-home-actions a').evaluateAll(anchors=>anchors.map(a=>a.href));
+   assert.deepEqual(routes,[new URL('/signin',base).href,new URL('/register',base).href],'public service links must match same-origin routes without search or hash');
+   console.log('PASS public homepage responsive '+width+'px: no horizontal overflow; nav background and layout; same-origin sign-in and registration links');
   }
  }finally{await publicContext.close();}
  for(const viewport of [{width:1440,height:1000},{width:390,height:844}]){

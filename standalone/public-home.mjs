@@ -3,7 +3,7 @@ export function publicHomeBody() {
  return `<style>
 .m7-home{max-width:1160px;margin:0 auto;padding:0 24px 48px;position:relative}
 .m7-home a:focus-visible{outline:3px solid #f0c66a;outline-offset:4px}
-.m7-home-nav{display:flex;justify-content:space-between;align-items:center;gap:24px;padding:23px 0;border-bottom:1px solid rgba(131,173,235,.2)}
+.m7-home-nav{height:auto;position:static;top:auto;z-index:auto;background:transparent;backdrop-filter:none;display:flex;justify-content:space-between;align-items:center;gap:24px;padding:23px 0;border-bottom:1px solid rgba(131,173,235,.2)}
 .m7-home-brand{display:flex;gap:13px;align-items:center;color:#fff;font-size:22px;font-weight:850;letter-spacing:.1em}
 .m7-home-brand:hover{text-decoration:none}
 .m7-home-brand img{height:54px;width:54px;object-fit:contain}
