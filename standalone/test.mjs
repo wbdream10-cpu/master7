@@ -5,7 +5,17 @@ import {mkdtempSync,rmSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawn} from 'node:child_process';
-delete process.env.PORTAL_POSTGRES_URL;delete process.env.RENDER;delete process.env.PORTAL_ALLOWED_ORIGINS;process.env.NODE_ENV='test';
+// Synthetic HTTP tests must not inherit hosted build-time markers. The deployed
+// server keeps those markers and always applies the service-only route guard.
+for(const name of [
+ 'RENDER','RENDER_EXTERNAL_URL','RENDER_SERVICE_ID',
+ 'RAILWAY_ENVIRONMENT_ID','RAILWAY_ENVIRONMENT_NAME',
+ 'RAILWAY_PROJECT_ID','RAILWAY_SERVICE_ID',
+ 'VERCEL','NETLIFY','FLY_APP_NAME','K_SERVICE',
+])delete process.env[name];
+delete process.env.PORTAL_POSTGRES_URL;
+delete process.env.PORTAL_ALLOWED_ORIGINS;
+process.env.NODE_ENV='test';
 const postgresTest=process.argv.includes('--postgres');
 if(postgresTest)process.env.PORTAL_TEST_POSTGRES='1';else delete process.env.PORTAL_TEST_POSTGRES;
 const dir=mkdtempSync(join(tmpdir(),'portal-test-'));process.env.PORTAL_DATABASE=join(dir,'portal.sqlite');process.env.PUBLIC_ORIGIN='http://127.0.0.1:8080';
