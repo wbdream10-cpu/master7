@@ -1,6 +1,7 @@
 import {origin,allowedOrigins} from './server-config.mjs';
 import {createServer} from 'node:http';
 import {publicHomeBody} from './public-home.mjs';
+import {serviceOnlyMode} from './service-mode.mjs';
 import {randomUUID,timingSafeEqual} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
@@ -19,7 +20,6 @@ import {BankReceiptUploadError,createBankDeposits,readBankReceiptBody} from './b
 import {createWithdrawals} from './withdrawals.mjs';
 import {createFinanceReconciliation} from './finance-reconciliation.mjs';
 const originAllowed=value=>typeof value==='string'&&allowedOrigins.has(value);
-const serviceOnlyMode=()=>process.env.NODE_ENV!=='test'&&Boolean(process.env.RENDER_EXTERNAL_URL);
 const serviceOnlySensitivePath=path=>[
  '/api/v1/deposit-requests',
  '/api/v1/bank-transfer/config',
