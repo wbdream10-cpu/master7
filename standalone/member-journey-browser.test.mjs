@@ -64,7 +64,9 @@ try{
   await navigate(owner,'财务管理');assert.equal((await reconciliationResponse).status(),200);
   await owner.getByRole('heading',{name:'统一资金净额对账',exact:true}).waitFor();await owner.getByRole('link',{name:'导出统一 CSV'}).waitFor();
   await navigate(owner,'会员管理');await owner.getByRole('link',{name:'打开账号管理'}).click();await row.getByRole('button',{name:'暂停并撤销登录'}).click();
-  await member.reload();await member.waitForURL('**/signin');assert.equal((await login(member,username)).status(),401,'suspended member cannot log back in');
+  await member.reload();await member.locator('#m7-home-title').waitFor();
+  assert.equal((await memberContext.request.get(base+'/api/portal')).status(),401,'suspended session must not access member API');
+  assert.equal((await login(member,username)).status(),401,'suspended member cannot log back in');
   assert.deepEqual(errors,[]);
   console.log('PASS '+viewport.width+'px: registration, pending rejection, UI approval, member login, admin denial, support submission/reply, shared brand name/theme persistence, authenticated finance rendering, suspension and session revocation; no page errors.');
   await ownerContext.close();await memberContext.close();
